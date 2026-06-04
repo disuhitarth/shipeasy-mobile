@@ -34,7 +34,7 @@ function Boot() {
   useEffect(() => {
     loadToken();
     loadBiometric();
-    configureAndroidChannel();
+    if (Platform.OS !== 'web') configureAndroidChannel();
 
     // Register push token after auth loads
     const timeout = setTimeout(async () => {
@@ -42,15 +42,16 @@ function Boot() {
       if (token) registerPushToken(token);
     }, 2000);
 
-    // Handle notification tap when app was killed
-    Notifications.getLastNotificationResponseAsync().then((resp) => {
-      if (resp) handleNotificationTap(resp.notification);
-    });
+    // Handle notification tap when app was killed — native only
+    if (Platform.OS !== 'web') {
+      Notifications.getLastNotificationResponseAsync().then((resp) => {
+        if (resp) handleNotificationTap(resp.notification);
+      });
 
-    // Handle notification tap while app is running
-    notificationResp.current = Notifications.addNotificationResponseReceivedListener(
-      (resp) => handleNotificationTap(resp.notification),
-    );
+      notificationResp.current = Notifications.addNotificationResponseReceivedListener(
+        (resp) => handleNotificationTap(resp.notification),
+      );
+    }
 
     return () => {
       clearTimeout(timeout);

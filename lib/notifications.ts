@@ -25,6 +25,7 @@ export function configureAndroidChannel() {
 
 // ── Request permission and return Expo push token ──
 export async function getExpoPushToken(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
   const { status: existing } = await Notifications.getPermissionsAsync();
   let finalStatus = existing;
   if (existing !== 'granted') {
@@ -64,6 +65,7 @@ export function getNotificationData(
 
 // ── Set up foreground handler (show alert when app is open) ──
 export function setupForegroundHandler() {
+  if (Platform.OS === 'web') return;
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
