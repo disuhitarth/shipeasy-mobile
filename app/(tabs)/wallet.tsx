@@ -1,7 +1,8 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useState, useCallback, useEffect } from 'react';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useWalletData } from '@/lib/queries';
 import { useBiometric } from '@/store/biometric';
@@ -9,7 +10,11 @@ import { useWallet } from '@/store/wallet';
 import { BalanceCard } from '@/components/ui/BalanceCard';
 import { Group } from '@/components/ui/Cell';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { StaggeredItem } from '@/components/Staggered';
+import { AnimatedScreen } from '@/components/AnimatedScreen';
+import { PressableScale } from '@/components/PressableScale';
 import { colors, borderRadius, spacing } from '@/lib/theme';
+import * as Haptics from '@/lib/haptics';
 
 const TX_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }> = {
   deposit: { icon: 'arrow-up', color: colors.green, bg: colors.greenSoft },
@@ -56,6 +61,7 @@ export default function WalletScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    Haptics.medium();
     await refetch();
     setRefreshing(false);
   }, [refetch]);
@@ -68,7 +74,10 @@ export default function WalletScreen() {
       fallbackLabel: 'Use passcode',
       disableDeviceFallback: false,
     });
-    if (result.success) unlock();
+    if (result.success) {
+      unlock();
+      Haptics.success();
+    }
     setAuthing(false);
   }, [unlock]);
 
@@ -77,102 +86,121 @@ export default function WalletScreen() {
 
   if (biometricEnabled && biometricLocked) {
     return (
-      <View style={styles.container}>
-        <View style={styles.lockOverlay}>
-          <Ionicons name="lock-closed" size={48} color={colors.accent} />
-          <Text style={styles.lockTitle}>Wallet Locked</Text>
-          <Text style={styles.lockSub}>Authenticate to view your wallet</Text>
-          <TouchableOpacity style={styles.unlockBtn} onPress={doAuth} disabled={authing}>
-            {authing ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="finger-print" size={20} color="#fff" />
-                <Text style={styles.unlockText}>Unlock</Text>
-              </>
-            )}
-          </TouchableOpacity>
+      <AnimatedScreen direction="fade">
+        <View style={styles.container}>
+          <Animated.View entering={FadeInDown.duration(420)} style={styles.lockOverlay}>
+            <Ionicons name="lock-closed" size={48} color={colors.accent} />
+            <Text style={styles.lockTitle}>Wallet Locked</Text>
+            <Text style={styles.lockSub}>Authenticate to view your wallet</Text>
+            <PressableScale style={styles.unlockBtn} onPress={doAuth} disabled={authing} haptic="medium">
+              {authing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="finger-print" size={20} color="#fff" />
+                  <Text style={styles.unlockText}>Unlock</Text>
+                </>
+              )}
+            </PressableScale>
+          </Animated.View>
         </View>
-      </View>
+      </AnimatedScreen>
     );
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-    >
-      <Text style={styles.title}>Wallet</Text>
+    <AnimatedScreen direction="fade-up">
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.Text entering={FadeInDown.duration(420)} style={styles.title}>Wallet</Animated.Text>
 
-      {isLoading ? (
-        <View style={styles.loadingWrap}>
-          <Skeleton height={140} radius={borderRadius.lg} />
-          <View style={styles.statsRow}>
-            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
-            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
-            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+        {isLoading ? (
+          <View style={styles.loadingWrap}>
+            <Skeleton height={140} radius={borderRadius.lg} />
+            <View style={styles.statsRow}>
+              <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+              <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+              <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+            </View>
+            <Skeleton height={24} width="40%" style={{ marginTop: spacing.xl }} />
+            <Skeleton height={200} radius={borderRadius.md} style={{ marginTop: spacing.md }} />
           </View>
-          <Skeleton height={24} width="40%" style={{ marginTop: spacing.xl }} />
-          <Skeleton height={200} radius={borderRadius.md} style={{ marginTop: spacing.md }} />
-        </View>
-      ) : (
-        <>
-          <BalanceCard
-            balance={data?.balance ?? 0}
-            onAdd={() => router.push('/wallet/topup')}
-            style={{ marginTop: spacing.lg }}
-          />
+        ) : (
+          <>
+            <Animated.View entering={FadeInDown.duration(420).delay(60)}>
+              <BalanceCard
+                balance={data?.balance ?? 0}
+                onAdd={() => router.push('/wallet/topup')}
+                style={{ marginTop: spacing.lg }}
+              />
+            </Animated.View>
 
-          <View style={styles.statsRow}>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Shipped</Text>
-              <Text style={styles.statValue}>${stats.shipped.toFixed(2)}</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Saved</Text>
-              <Text style={[styles.statValue, { color: colors.green }]}>${stats.saved.toFixed(2)}</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Loaded</Text>
-              <Text style={[styles.statValue, { color: colors.accent }]}>${stats.loaded.toFixed(2)}</Text>
-            </View>
-          </View>
+            <Animated.View entering={FadeInDown.duration(420).delay(120)} style={styles.statsRow}>
+              <StaggeredItem index={0} duration={300}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Shipped</Text>
+                  <Text style={styles.statValue}>${stats.shipped.toFixed(2)}</Text>
+                </View>
+              </StaggeredItem>
+              <StaggeredItem index={1} duration={300}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Saved</Text>
+                  <Text style={[styles.statValue, { color: colors.green }]}>${stats.saved.toFixed(2)}</Text>
+                </View>
+              </StaggeredItem>
+              <StaggeredItem index={2} duration={300}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Loaded</Text>
+                  <Text style={[styles.statValue, { color: colors.accent }]}>${stats.loaded.toFixed(2)}</Text>
+                </View>
+              </StaggeredItem>
+            </Animated.View>
 
-          <Text style={styles.sectionTitle}>Recent activity</Text>
+            <Animated.Text entering={FadeInDown.duration(420).delay(180)} style={styles.sectionTitle}>Recent activity</Animated.Text>
 
-          {transactions.length === 0 ? (
-            <View style={styles.emptyState}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="wallet-outline" size={28} color={colors.faint} />
-              </View>
-              <Text style={styles.emptyTitle}>No activity yet</Text>
-              <Text style={styles.emptySub}>Your transactions will appear here</Text>
-            </View>
-          ) : (
-            <Group>
-              {transactions.map((tx, i) => {
-                const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: colors.faint, bg: colors.surface2 };
-                return (
-                  <TouchableOpacity key={tx._id || i} style={styles.txRow} activeOpacity={0.6}>
-                    <View style={[styles.txIcon, { backgroundColor: meta.bg }]}>
-                      <Ionicons name={meta.icon} size={18} color={meta.color} />
-                    </View>
-                    <View style={styles.txInfo}>
-                      <Text style={styles.txLabel} numberOfLines={1}>{tx.description}</Text>
-                      <Text style={styles.txDate}>{formatDate(tx.createdAt)}</Text>
-                    </View>
-                    <Text style={[styles.txAmount, { color: tx.amount > 0 ? colors.green : colors.ink }]}>
-                      {tx.amount > 0 ? '+' : ''}${Math.abs(tx.amount).toFixed(2)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </Group>
-          )}
-        </>
-      )}
-    </ScrollView>
+            {transactions.length === 0 ? (
+              <Animated.View entering={FadeInDown.duration(420).delay(220)} style={styles.emptyState}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="wallet-outline" size={28} color={colors.faint} />
+                </View>
+                <Text style={styles.emptyTitle}>No activity yet</Text>
+                <Text style={styles.emptySub}>Your transactions will appear here</Text>
+              </Animated.View>
+            ) : (
+              <Group>
+                {transactions.map((tx, i) => {
+                  const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: colors.faint, bg: colors.surface2 };
+                  return (
+                    <Animated.View
+                      key={tx._id || i}
+                      entering={FadeInDown.duration(360).delay(Math.min(i, 12) * 50)}
+                      layout={LinearTransition.springify().damping(20).stiffness(220)}
+                    >
+                      <TouchableOpacity style={styles.txRow} activeOpacity={0.6}>
+                        <View style={[styles.txIcon, { backgroundColor: meta.bg }]}>
+                          <Ionicons name={meta.icon} size={18} color={meta.color} />
+                        </View>
+                        <View style={styles.txInfo}>
+                          <Text style={styles.txLabel} numberOfLines={1}>{tx.description}</Text>
+                          <Text style={styles.txDate}>{formatDate(tx.createdAt)}</Text>
+                        </View>
+                        <Text style={[styles.txAmount, { color: tx.amount > 0 ? colors.green : colors.ink }]}>
+                          {tx.amount > 0 ? '+' : ''}${Math.abs(tx.amount).toFixed(2)}
+                        </Text>
+                      </TouchableOpacity>
+                    </Animated.View>
+                  );
+                })}
+              </Group>
+            )}
+          </>
+        )}
+      </ScrollView>
+    </AnimatedScreen>
   );
 }
 
@@ -208,6 +236,11 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     padding: 15,
     alignItems: 'center',
+    shadowColor: 'rgba(10,10,25,0.04)',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 2,
+    elevation: 1,
   },
   statLabel: {
     fontSize: 12,

@@ -1,12 +1,20 @@
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useState, useCallback, useEffect, useRef } from 'react';
+import type { TextInput as RNTextInput } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
+import Animated, { FadeInUp, FadeInDown } from 'react-native-reanimated';
 import * as WebBrowser from 'expo-web-browser';
 import { useGuestCheckout, useGetRates } from '@/lib/queries';
 import api from '@/lib/api';
 import { colors, spacing, borderRadius, typography, shadows } from '@/lib/theme';
+import { validateEmail, validateName, validateCity, validatePostalCode, validateRequired, validateWeight, validateForm, type ValidationResult } from '@/lib/validation';
+import { toast } from '@/lib/toast';
+import { FormField } from '@/components/ui/FormField';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
 
 const PACKAGE_TYPES = [
   { id: 'envelope', label: 'Envelope', icon: 'document-text' as const },
@@ -23,24 +31,60 @@ const RATES_INFO = [
   { id: 'PRI', name: 'Stallion Priority', svc: 'Tracked · Insured', days: '1–2 business days' },
 ];
 
+type FormShape = {
+  name: string;
+  company: string;
+  address1: string;
+  address2: string;
+  city: string;
+  province_code: string;
+  postal_code: string;
+  country_code: string;
+  email: string;
+  phone: string;
+  itemDescription: string;
+  weight: string;
+  weightUnit: 'lb' | 'kg';
+  length: string;
+  width: string;
+  height: string;
+  dimUnit: 'in' | 'cm';
+  rateId: string;
+};
+
+const EMPTY: FormShape = {
+  name: '', company: '', address1: '', address2: '', city: '',
+  province_code: 'ON', postal_code: '', country_code: 'CA',
+  email: '', phone: '', itemDescription: '',
+  weight: '', weightUnit: 'lb',
+  length: '', width: '', height: '', dimUnit: 'in',
+  rateId: 'ECO',
+};
+
 export default function ShipNowScreen() {
   const checkout = useGuestCheckout();
   const getRates = useGetRates();
   const qc = useQueryClient();
+  const insets = useSafeAreaInsets();
   const [preset, setPreset] = useState('envelope');
-  const [form, setForm] = useState({
-    name: '', company: '', address1: '', address2: '', city: '',
-    province_code: 'ON', postal_code: '', country_code: 'CA',
-    email: '', phone: '', itemDescription: '',
-    weight: '', weightUnit: 'lb' as 'lb' | 'kg',
-    length: '', width: '', height: '', dimUnit: 'in' as 'in' | 'cm',
-    rateId: 'ECO',
-  });
+  const [form, setForm] = useState<FormShape>(EMPTY);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [rates, setRates] = useState<{ id: string; totalPrice: number }[] | null>(null);
   const [ratesLoading, setRatesLoading] = useState(false);
   const rateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const update = useCallback((p: Partial<typeof form>) => {
+  const nameRef = useRef<RNTextInput>(null);
+  const companyRef = useRef<RNTextInput>(null);
+  const address1Ref = useRef<RNTextInput>(null);
+  const address2Ref = useRef<RNTextInput>(null);
+  const cityRef = useRef<RNTextInput>(null);
+  const postalRef = useRef<RNTextInput>(null);
+  const emailRef = useRef<RNTextInput>(null);
+  const phoneRef = useRef<RNTextInput>(null);
+  const itemRef = useRef<RNTextInput>(null);
+
+  const update = useCallback((p: Partial<FormShape>) => {
     setForm((f) => ({ ...f, ...p }));
   }, []);
 
@@ -76,9 +120,61 @@ export default function ShipNowScreen() {
     return () => { if (rateTimer.current) clearTimeout(rateTimer.current); };
   }, [form.weight, form.weightUnit, form.length, form.width, form.height, form.postal_code, form.country_code]);
 
+  const onFieldChange = useCallback((key: keyof FormShape, value: string) => {
+    setForm((f) => {
+      const next = { ...f, [key]: value };
+      if (touched[key]) {
+        setTimeout(() => {
+          const r = computeErrors(next);
+          setErrors(r.errors);
+        }, 0);
+      }
+      return next;
+    });
+  }, [touched]);
+
+  const onFieldBlur = useCallback((key: keyof FormShape) => {
+    setTouched((t) => ({ ...t, [key]: true }));
+    setTimeout(() => {
+      const r = computeErrors(form);
+      setErrors(r.errors);
+    }, 0);
+  }, [form]);
+
+  function computeErrors(values: FormShape): ValidationResult {
+    return validateForm(values, {
+      name: validateName,
+      address1: (v) => validateRequired(String(v ?? ''), 'Address line 1'),
+      city: validateCity,
+      postal_code: (v) => validatePostalCode(String(v ?? ''), values.country_code),
+      email: validateEmail,
+      itemDescription: (v) => validateRequired(String(v ?? ''), 'Item description'),
+      weight: (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Weight is required';
+        const n = parseFloat(s);
+        if (Number.isNaN(n)) return 'Enter a valid weight';
+        return validateWeight(n, values.weightUnit);
+      },
+    });
+  }
+
   const submit = useCallback(async () => {
-    if (!form.name || !form.address1 || !form.city || !form.postal_code || !form.email || !form.itemDescription || !form.weight) {
-      Alert.alert('Missing fields', 'Please fill in all required fields');
+    setTouched({
+      name: true, address1: true, city: true, postal_code: true,
+      email: true, itemDescription: true, weight: true,
+    });
+    const r = computeErrors(form);
+    setErrors(r.errors);
+    if (!r.isValid) {
+      const order: (keyof FormShape)[] = ['name', 'address1', 'city', 'postal_code', 'email', 'itemDescription', 'weight'];
+      const first = order.find((k) => r.errors[k]);
+      const refMap: Partial<Record<keyof FormShape, React.RefObject<RNTextInput | null>>> = {
+        name: nameRef, address1: address1Ref, city: cityRef, postal_code: postalRef,
+        email: emailRef, itemDescription: itemRef,
+      };
+      if (first) refMap[first]?.current?.focus();
+      toast.error('Please fix the highlighted fields');
       return;
     }
 
@@ -87,53 +183,62 @@ export default function ShipNowScreen() {
       await WebBrowser.openBrowserAsync(url);
 
       qc.invalidateQueries({ queryKey: ['shipments'] });
-      Alert.alert(
-        'Payment submitted',
-        'Your label is being generated. Check your email for the download link, or check back in Shipments.',
-        [{ text: 'OK', onPress: () => router.replace('/(tabs)/shipments') }],
-      );
-    } catch {}
+      toast.success('Payment submitted — check your email for the label');
+      setTimeout(() => router.replace('/(tabs)/shipments'), 800);
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not start checkout');
+    }
   }, [form, preset, checkout, qc]);
 
   const busy = checkout.isPending;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => router.back()}>
+      <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+        <PressableScale style={styles.navBtn} onPress={() => router.back()} haptic="light">
           <Ionicons name="chevron-back" size={20} color={colors.ink} />
-        </TouchableOpacity>
+        </PressableScale>
         <Text style={styles.headerTitle}>Ship Now</Text>
         <View style={{ width: 40 }} />
-      </View>
+      </Animated.View>
 
       <ScrollView style={styles.body} contentContainerStyle={styles.bodyInner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.section}>Package type</Text>
+        <Animated.Text entering={FadeInUp.duration(360).delay(80)} style={styles.section}>
+          Package type
+        </Animated.Text>
         <View style={styles.typeGrid}>
-          {PACKAGE_TYPES.map((p) => (
-            <TouchableOpacity
+          {PACKAGE_TYPES.map((p, i) => (
+            <Animated.View
               key={p.id}
-              style={[styles.typeCard, preset === p.id && styles.typeCardActive]}
-              onPress={() => setPreset(p.id)}
+              entering={FadeInUp.duration(360).delay(120 + i * 70)}
+              style={{ flex: 1 }}
             >
-              <Ionicons name={p.icon} size={24} color={preset === p.id ? colors.accent : colors.muted} />
-              <Text style={[styles.typeLabel, preset === p.id && styles.typeLabelActive]}>{p.label}</Text>
-            </TouchableOpacity>
+              <PressableScale
+                style={[styles.typeCard, preset === p.id && styles.typeCardActive]}
+                onPress={() => { Haptics.light(); setPreset(p.id); }}
+                haptic="light"
+              >
+                <Ionicons name={p.icon} size={24} color={preset === p.id ? colors.accent : colors.muted} />
+                <Text style={[styles.typeLabel, preset === p.id && styles.typeLabelActive]}>{p.label}</Text>
+              </PressableScale>
+            </Animated.View>
           ))}
         </View>
 
-        <View style={styles.weightCard}>
+        <Animated.View entering={FadeInUp.duration(360).delay(320)} style={styles.weightCard}>
           <View style={styles.cardRow}>
-            <Text style={styles.cardLabel}>Weight</Text>
+            <Text style={styles.cardLabel}>Weight *</Text>
             <View style={styles.segControl}>
               {(['lb', 'kg'] as const).map((u) => (
-                <TouchableOpacity
+                <PressableScale
                   key={u}
                   style={[styles.segBtn, form.weightUnit === u && styles.segBtnActive]}
-                  onPress={() => update({ weightUnit: u })}
+                  onPress={() => { Haptics.selection(); update({ weightUnit: u }); }}
+                  haptic="selection"
+                  scaleTo={0.94}
                 >
                   <Text style={[styles.segText, form.weightUnit === u && styles.segTextActive]}>{u}</Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </View>
           </View>
@@ -144,24 +249,31 @@ export default function ShipNowScreen() {
               placeholder="0.0"
               placeholderTextColor={colors.faint}
               value={form.weight}
-              onChangeText={(v) => update({ weight: v })}
+              onChangeText={(v) => onFieldChange('weight', v)}
+              onBlur={() => onFieldBlur('weight')}
+              returnKeyType="next"
             />
             <Text style={styles.bigUnit}>{form.weightUnit}</Text>
           </View>
-        </View>
+          {touched.weight && errors.weight ? (
+            <Text style={styles.fieldError}>{errors.weight}</Text>
+          ) : null}
+        </Animated.View>
 
-        <View style={styles.dimsCard}>
+        <Animated.View entering={FadeInUp.duration(360).delay(400)} style={styles.dimsCard}>
           <View style={styles.cardRow}>
             <Text style={styles.cardLabel}>Dimensions</Text>
             <View style={styles.segControl}>
               {(['in', 'cm'] as const).map((u) => (
-                <TouchableOpacity
+                <PressableScale
                   key={u}
                   style={[styles.segBtn, form.dimUnit === u && styles.segBtnActive]}
-                  onPress={() => update({ dimUnit: u })}
+                  onPress={() => { Haptics.selection(); update({ dimUnit: u }); }}
+                  haptic="selection"
+                  scaleTo={0.94}
                 >
                   <Text style={[styles.segText, form.dimUnit === u && styles.segTextActive]}>{u}</Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </View>
           </View>
@@ -175,6 +287,7 @@ export default function ShipNowScreen() {
                   placeholderTextColor={colors.faint}
                   value={form[k]}
                   onChangeText={(v) => update({ [k]: v })}
+                  returnKeyType={k === 'height' ? 'done' : 'next'}
                 />
                 <Text style={styles.dimLabel}>
                   {k === 'length' ? 'L' : k === 'width' ? 'W' : 'H'}
@@ -182,42 +295,161 @@ export default function ShipNowScreen() {
               </View>
             ))}
           </View>
-        </View>
+        </Animated.View>
 
-        <Text style={styles.section}>Recipient</Text>
-        <View style={styles.card}>
-          <Input label="Full name *" value={form.name} onChange={(t) => update({ name: t })} />
-          <Input label="Company" value={form.company} onChange={(t) => update({ company: t })} />
-          <Input label="Address line 1 *" value={form.address1} onChange={(t) => update({ address1: t })} />
-          <Input label="Address line 2" value={form.address2} onChange={(t) => update({ address2: t })} />
-          <Input label="City *" value={form.city} onChange={(t) => update({ city: t })} />
+        <Animated.Text entering={FadeInUp.duration(360).delay(480)} style={styles.section}>
+          Recipient
+        </Animated.Text>
+        <Animated.View entering={FadeInUp.duration(360).delay(540)} style={styles.card}>
+          <FormField
+            ref={nameRef}
+            label="Full name *"
+            value={form.name}
+            onChangeText={(t) => onFieldChange('name', t)}
+            onBlur={() => onFieldBlur('name')}
+            error={touched.name ? errors.name : null}
+            required
+            autoCapitalize="words"
+            autoComplete="name"
+            textContentType="name"
+            returnKeyType="next"
+            onSubmitEditing={() => companyRef.current?.focus()}
+          />
+          <FormField
+            ref={companyRef}
+            label="Company"
+            value={form.company}
+            onChangeText={(t) => update({ company: t })}
+            autoCapitalize="words"
+            autoComplete="organization"
+            textContentType="organizationName"
+            returnKeyType="next"
+            onSubmitEditing={() => address1Ref.current?.focus()}
+          />
+          <FormField
+            ref={address1Ref}
+            label="Address line 1 *"
+            value={form.address1}
+            onChangeText={(t) => onFieldChange('address1', t)}
+            onBlur={() => onFieldBlur('address1')}
+            error={touched.address1 ? errors.address1 : null}
+            required
+            autoCapitalize="words"
+            autoComplete="address-line1"
+            textContentType="streetAddressLine1"
+            returnKeyType="next"
+            onSubmitEditing={() => address2Ref.current?.focus()}
+          />
+          <FormField
+            ref={address2Ref}
+            label="Address line 2"
+            value={form.address2}
+            onChangeText={(t) => update({ address2: t })}
+            autoCapitalize="words"
+            autoComplete="address-line2"
+            textContentType="streetAddressLine2"
+            returnKeyType="next"
+            onSubmitEditing={() => cityRef.current?.focus()}
+          />
+          <FormField
+            ref={cityRef}
+            label="City *"
+            value={form.city}
+            onChangeText={(t) => onFieldChange('city', t)}
+            onBlur={() => onFieldBlur('city')}
+            error={touched.city ? errors.city : null}
+            required
+            autoCapitalize="words"
+            autoComplete="postal-address-locality"
+            textContentType="addressCity"
+            returnKeyType="next"
+            onSubmitEditing={() => postalRef.current?.focus()}
+          />
           <Text style={styles.inputLabel}>Province</Text>
           <View style={styles.provinceRow}>
             {PROVINCES.map((p) => (
-              <TouchableOpacity
+              <PressableScale
                 key={p}
                 style={[styles.provBtn, form.province_code === p && styles.provBtnActive]}
-                onPress={() => update({ province_code: p })}
+                onPress={() => { Haptics.selection(); update({ province_code: p }); }}
+                haptic="selection"
+                scaleTo={0.92}
               >
                 <Text style={[styles.provText, form.province_code === p && styles.provTextActive]}>{p}</Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
-          <Input label="Postal code *" value={form.postal_code} onChange={(t) => update({ postal_code: t.toUpperCase() })} autoCapitalize="characters" />
-        </View>
+          <FormField
+            ref={postalRef}
+            label="Postal code *"
+            value={form.postal_code}
+            onChangeText={(t) => onFieldChange('postal_code', t.toUpperCase())}
+            onBlur={() => onFieldBlur('postal_code')}
+            error={touched.postal_code ? errors.postal_code : null}
+            required
+            autoCapitalize="characters"
+            autoComplete="postal-code"
+            textContentType="postalCode"
+            returnKeyType="next"
+            onSubmitEditing={() => emailRef.current?.focus()}
+          />
+        </Animated.View>
 
-        <Text style={styles.section}>Contact</Text>
+        <Animated.Text entering={FadeInUp.duration(360).delay(620)} style={styles.section}>
+          Contact
+        </Animated.Text>
+        <Animated.View entering={FadeInUp.duration(360).delay(660)} style={styles.card}>
+          <FormField
+            ref={emailRef}
+            label="Email *"
+            value={form.email}
+            onChangeText={(t) => onFieldChange('email', t)}
+            onBlur={() => onFieldBlur('email')}
+            error={touched.email ? errors.email : null}
+            required
+            autoCapitalize="none"
+            autoComplete="email"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
+            returnKeyType="next"
+            onSubmitEditing={() => phoneRef.current?.focus()}
+          />
+          <FormField
+            ref={phoneRef}
+            label="Phone"
+            value={form.phone}
+            onChangeText={(t) => update({ phone: t })}
+            keyboardType="phone-pad"
+            autoComplete="tel"
+            textContentType="telephoneNumber"
+            returnKeyType="next"
+            onSubmitEditing={() => itemRef.current?.focus()}
+          />
+        </Animated.View>
+
+        <Animated.Text entering={FadeInUp.duration(360).delay(700)} style={styles.section}>
+          Item
+        </Animated.Text>
         <View style={styles.card}>
-          <Input label="Email *" value={form.email} onChange={(t) => update({ email: t })} keyboardType="email-address" autoCapitalize="none" />
-          <Input label="Phone" value={form.phone} onChange={(t) => update({ phone: t })} keyboardType="phone-pad" />
+          <FormField
+            ref={itemRef}
+            label="What are you shipping? *"
+            value={form.itemDescription}
+            onChangeText={(t) => onFieldChange('itemDescription', t)}
+            onBlur={() => onFieldBlur('itemDescription')}
+            error={touched.itemDescription ? errors.itemDescription : null}
+            required
+            placeholder="e.g. T-shirt"
+            autoCapitalize="sentences"
+            returnKeyType="done"
+            onSubmitEditing={submit}
+          />
         </View>
 
-        <Text style={styles.section}>Item</Text>
-        <View style={styles.card}>
-          <Input label="What are you shipping? *" value={form.itemDescription} onChange={(t) => update({ itemDescription: t })} placeholder="e.g. T-shirt" />
-        </View>
-
-        <Text style={styles.section}>Carrier</Text>
+        <Animated.Text entering={FadeInUp.duration(360).delay(780)} style={styles.section}>
+          Carrier
+        </Animated.Text>
         <View style={styles.ratesContainer}>
           {ratesLoading ? (
             <View style={styles.ratesLoadingRow}>
@@ -225,34 +457,39 @@ export default function ShipNowScreen() {
               <Text style={styles.ratesLoadingText}>Fetching live rates…</Text>
             </View>
           ) : rates ? (
-            rates.map((rate) => {
+            rates.map((rate, i) => {
               const r = RATES_INFO.find((ri) => ri.id === rate.id) || RATES_INFO[0];
               const sel = form.rateId === rate.id;
               return (
-                <TouchableOpacity
+                <Animated.View
                   key={rate.id}
-                  style={[styles.rateCard, sel && styles.rateCardActive]}
-                  onPress={() => update({ rateId: rate.id })}
+                  entering={FadeInUp.duration(320).delay(820 + i * 70)}
                 >
-                  <View style={[styles.rateIconWrap, sel && styles.rateIconWrapActive]}>
-                    <Ionicons name="cube" size={20} color={sel ? colors.white : colors.accent} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.rateNameRow}>
-                      <Text style={styles.rateName}>{r.name}</Text>
-                      {'badge' in r && r.badge && (
-                        <Text style={[styles.rateBadge, r.badge === 'Fastest' && styles.rateBadgeFast]}>
-                          {r.badge}
-                        </Text>
-                      )}
+                  <PressableScale
+                    style={[styles.rateCard, sel && styles.rateCardActive]}
+                    onPress={() => { Haptics.light(); update({ rateId: rate.id }); }}
+                    haptic="light"
+                  >
+                    <View style={[styles.rateIconWrap, sel && styles.rateIconWrapActive]}>
+                      <Ionicons name="cube" size={20} color={sel ? colors.white : colors.accent} />
                     </View>
-                    <Text style={styles.rateMeta}>{r.days} · {r.svc}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={styles.ratePrice}>${rate.totalPrice.toFixed(2)}</Text>
-                    <Text style={styles.rateTax}>incl. HST</Text>
-                  </View>
-                </TouchableOpacity>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.rateNameRow}>
+                        <Text style={styles.rateName}>{r.name}</Text>
+                        {'badge' in r && r.badge && (
+                          <Text style={[styles.rateBadge, r.badge === 'Fastest' && styles.rateBadgeFast]}>
+                            {r.badge}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={styles.rateMeta}>{r.days} · {r.svc}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.ratePrice}>${rate.totalPrice.toFixed(2)}</Text>
+                      <Text style={styles.rateTax}>incl. HST</Text>
+                    </View>
+                  </PressableScale>
+                </Animated.View>
               );
             })
           ) : (
@@ -269,32 +506,12 @@ export default function ShipNowScreen() {
         </View>
       </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity style={[styles.cta, busy && styles.ctaDisabled]} onPress={submit} disabled={busy}>
+      <Animated.View entering={FadeInUp.duration(360).delay(120)} style={styles.footer}>
+        <PressableScale style={[styles.cta, busy && styles.ctaDisabled]} onPress={submit} disabled={busy} haptic="success">
           {busy ? <ActivityIndicator size="small" color={colors.white} /> : <Text style={styles.ctaText}>Continue to payment</Text>}
-        </TouchableOpacity>
-      </View>
+        </PressableScale>
+      </Animated.View>
     </KeyboardAvoidingView>
-  );
-}
-
-function Input({ label, value, onChange, placeholder, keyboardType, autoCapitalize }: {
-  label: string; value: string; onChange: (t: string) => void;
-  placeholder?: string; keyboardType?: any; autoCapitalize?: any;
-}) {
-  return (
-    <View style={{ marginBottom: 0 }}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder || ''}
-        placeholderTextColor={colors.faint}
-        keyboardType={keyboardType}
-        autoCapitalize={autoCapitalize || 'sentences'}
-      />
-    </View>
   );
 }
 
@@ -302,7 +519,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.xl, paddingTop: 60, paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.xl, paddingBottom: spacing.sm,
   },
   navBtn: {
     width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,
@@ -354,6 +571,12 @@ const styles = StyleSheet.create({
     color: colors.ink, padding: 0,
   },
   bigUnit: { fontSize: 22, fontWeight: '600', color: colors.faint },
+  fieldError: {
+    fontSize: 12.5,
+    color: colors.red,
+    marginTop: spacing.xs,
+    fontWeight: '500',
+  },
   dimsRow: { flexDirection: 'row', gap: spacing.sm },
   dimField: { flex: 1, alignItems: 'center', gap: spacing.xs },
   dimInput: {
@@ -368,12 +591,6 @@ const styles = StyleSheet.create({
     padding: spacing.lg, gap: spacing.lg, ...shadows.sm,
   },
   inputLabel: { fontSize: 12.5, fontWeight: '600', color: colors.muted, marginBottom: spacing.xs },
-  input: {
-    backgroundColor: colors.surface2, height: 50,
-    borderRadius: borderRadius.sm, paddingHorizontal: spacing.lg,
-    fontSize: 15, color: colors.ink,
-    borderWidth: 1, borderColor: colors.hairline,
-  },
   provinceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   provBtn: {
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,

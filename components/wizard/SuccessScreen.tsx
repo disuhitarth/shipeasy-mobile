@@ -1,6 +1,10 @@
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInUp, ZoomIn } from 'react-native-reanimated';
 import { Button } from '@/components/ui/Button';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
+import { colors, shadows } from '@/lib/theme';
 
 interface SuccessScreenProps {
   shipment: {
@@ -15,52 +19,56 @@ interface SuccessScreenProps {
 export function SuccessScreen({ shipment, onDone, onTrack, onViewLabel }: SuccessScreenProps) {
   return (
     <View style={styles.container}>
-      {/* Success Animation */}
-      <View style={styles.ring}>
+      <Animated.View entering={ZoomIn.duration(560).springify().damping(14)} style={styles.ring}>
         <View style={styles.checkCircle}>
-          <Ionicons name="checkmark" size={44} color="#1E9E6A" />
+          <Animated.View entering={FadeInUp.duration(400).delay(220)}>
+            <Ionicons name="checkmark" size={44} color="#1E9E6A" />
+          </Animated.View>
         </View>
-      </View>
+      </Animated.View>
 
-      <View style={styles.textBlock}>
+      <Animated.View entering={FadeInUp.duration(360).delay(180)} style={styles.textBlock}>
         <Text style={styles.title}>Label purchased</Text>
         <Text style={styles.sub}>
           Your label is ready to print and your wallet was charged ${shipment.price.toFixed(2)}.
         </Text>
-      </View>
+      </Animated.View>
 
-      {/* Tracking Number */}
-      <View style={styles.card}>
+      <Animated.View entering={FadeInUp.duration(360).delay(280)} style={styles.card}>
         <View style={styles.trackingRow}>
           <View>
             <Text style={styles.trackingLabel}>Tracking number</Text>
             <Text style={styles.trackingCode}>{shipment.id}</Text>
           </View>
-          <TouchableOpacity style={styles.copyBtn}>
+          <PressableScale
+            style={styles.copyBtn}
+            onPress={() => Haptics.light()}
+            haptic="light"
+            scaleTo={0.88}
+          >
             <Ionicons name="copy-outline" size={17} color="#0B0B12" />
-          </TouchableOpacity>
+          </PressableScale>
         </View>
         <View style={styles.dlRow}>
-          <TouchableOpacity style={styles.dlChip} onPress={onViewLabel}>
-            <Ionicons name="document-text" size={16} color="#635BFF" />
+          <PressableScale style={styles.dlChip} onPress={onViewLabel} haptic="light">
+            <Ionicons name="document-text" size={16} color={colors.accent} />
             <Text style={styles.dlText}>PDF label</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.dlChip} onPress={onViewLabel}>
-            <Ionicons name="download" size={16} color="#635BFF" />
+          </PressableScale>
+          <PressableScale style={styles.dlChip} onPress={onViewLabel} haptic="light">
+            <Ionicons name="download" size={16} color={colors.accent} />
             <Text style={styles.dlText}>ZPL (4×6)</Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
-      </View>
+      </Animated.View>
 
-      {/* Actions */}
-      <View style={styles.actions}>
-        <Button variant="primary" full onPress={onTrack}>
+      <Animated.View entering={FadeInUp.duration(360).delay(380)} style={styles.actions}>
+        <Button variant="primary" full onPress={onTrack} haptic="success">
           Track shipment
         </Button>
-        <Button variant="ghost" full onPress={onDone}>
+        <Button variant="ghost" full onPress={onDone} haptic="light">
           Back to home
         </Button>
-      </View>
+      </Animated.View>
     </View>
   );
 }

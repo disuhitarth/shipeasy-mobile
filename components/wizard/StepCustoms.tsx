@@ -1,8 +1,12 @@
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, ActivityIndicator } from 'react-native';
+import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useClassifyHS } from '@/lib/queries';
-import { useState } from 'react';
 import type { WizardState, CustomsItem } from './types';
+import { validateRequired, validateHSCode, validateAmount, validateForm } from '@/lib/validation';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
 
 const HS_GUESS: Record<string, string> = {
   lens: '9002.11',
@@ -13,20 +17,94 @@ const HS_GUESS: Record<string, string> = {
   mug: '6912.00',
 };
 
+export interface StepCustomsRef {
+  validate: () => boolean;
+  focusFirstError: () => void;
+}
+
 interface Props {
   state: WizardState;
   set: (patch: Partial<WizardState>) => void;
 }
 
-export function StepCustoms({ state, set }: Props) {
+export const StepCustoms = forwardRef<StepCustomsRef, Props>(function StepCustoms({ state, set }, ref) {
   const [aiBusy, setAiBusy] = useState(false);
+  const [errors, setErrors] = useState<Record<string, Record<string, string>>>({});
+  const [touched, setTouched] = useState<Record<string, Record<string, boolean>>>({});
+  const inputRefs = useRef<Record<string, TextInput | null>>({});
   const classifyHs = useClassifyHS();
 
   const items = state.items;
+
+  const validateOne = (item: CustomsItem, _idx: number): Record<string, string> => {
+    return validateForm(item as any, {
+      description: (v: any) => validateRequired(String(v ?? ''), 'Description'),
+      quantity: (v: any) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Required';
+        const n = parseInt(s, 10);
+        if (Number.isNaN(n)) return 'Whole number';
+        if (n < 1) return 'Min 1';
+        if (n > 999) return 'Max 999';
+        return null;
+      },
+      value: (v: any) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Required';
+        const n = parseFloat(s);
+        if (Number.isNaN(n)) return 'Invalid';
+        return validateAmount(n, 0, 100000);
+      },
+      origin: (v: any) => validateRequired(String(v ?? ''), 'Origin'),
+      hsCode: (v: any) => validateHSCode(String(v ?? '')),
+    } as any).errors;
+  };
+
+  const validate = (): boolean => {
+    const next: Record<string, Record<string, string>> = {};
+    let allValid = true;
+    items.forEach((it, i) => {
+      const errs = validateOne(it, i);
+      if (Object.keys(errs).length > 0) allValid = false;
+      next[String(i)] = errs;
+    });
+    setErrors(next);
+    return allValid;
+  };
+
+  useImperativeHandle(ref, () => ({
+    validate,
+    focusFirstError: () => {
+      for (let i = 0; i < items.length; i++) {
+        const errs = errors[String(i)] || {};
+        const fields: (keyof CustomsItem)[] = ['description', 'quantity', 'value', 'origin', 'hsCode'];
+        for (const f of fields) {
+          if (errs[f]) {
+            inputRefs.current[`${i}-${f}`]?.focus();
+            return;
+          }
+        }
+      }
+    },
+  }), [errors, items]);
+
+  useEffect(() => {
+    const hasTouched = Object.values(touched).some((t) => Object.values(t).some(Boolean));
+    if (hasTouched) validate();
+  }, [items, touched]);
+
   const updateItem = (idx: number, patch: Partial<CustomsItem>) => {
     const next = items.map((it, i) => (i === idx ? { ...it, ...patch } : it));
     set({ items: next });
   };
+
+  const markTouched = (idx: number, key: keyof CustomsItem) => {
+    setTouched((t) => {
+      const ti = String(idx);
+      return { ...t, [ti]: { ...(t[ti] || {}), [key]: true } };
+    });
+  };
+
   const addItem = () => {
     set({ items: [...items, { description: '', quantity: '1', value: '', origin: 'Canada', hsCode: '' }] });
   };
@@ -61,7 +139,6 @@ export function StepCustoms({ state, set }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* AI Customs Card */}
       <View style={styles.aiCard}>
         <View style={styles.aiRow}>
           <View style={styles.aiIcon}>
@@ -74,10 +151,14 @@ export function StepCustoms({ state, set }: Props) {
             </Text>
           </View>
         </View>
-        <TouchableOpacity
+        <PressableScale
           style={styles.aiBtn}
-          onPress={classifyAll}
+          onPress={() => {
+            Haptics.medium();
+            classifyAll();
+          }}
           disabled={aiBusy}
+          haptic="medium"
         >
           {aiBusy ? (
             <ActivityIndicator size="small" color="#635BFF" />
@@ -89,92 +170,151 @@ export function StepCustoms({ state, set }: Props) {
               ? 'Classifying items…'
               : `Auto-classify ${items.length} item${items.length > 1 ? 's' : ''}`}
           </Text>
-        </TouchableOpacity>
+        </PressableScale>
       </View>
 
-      {/* Items */}
-      {items.map((it, i) => (
-        <View key={i} style={styles.itemCard}>
-          <View style={styles.itemHeader}>
-            <Text style={styles.itemNumber}>Item {i + 1}</Text>
-            {items.length > 1 && (
-              <TouchableOpacity onPress={() => removeItem(i)} style={styles.xBtn}>
-                <Ionicons name="close" size={14} color="#6B6B76" />
-              </TouchableOpacity>
-            )}
-          </View>
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>Description</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Cotton t-shirt"
-              placeholderTextColor="#9A9AA4"
-              value={it.description}
-              onChangeText={(v) => updateItem(i, { description: v })}
-            />
-          </View>
-          <View style={styles.row}>
-            <View style={[styles.field, { flex: 1 }]}>
-              <Text style={styles.fieldLabel}>Qty</Text>
-              <TextInput
-                style={styles.input}
-                inputMode="numeric"
-                placeholderTextColor="#9A9AA4"
-                value={it.quantity}
-                onChangeText={(v) => updateItem(i, { quantity: v })}
-              />
+      {items.map((it, i) => {
+        const idxKey = String(i);
+        const errs = errors[idxKey] || {};
+        const tch = touched[idxKey] || {};
+        return (
+          <Animated.View
+            key={i}
+            entering={FadeInDown.duration(360).delay(i * 70)}
+            layout={LinearTransition.springify().damping(20).stiffness(220)}
+            style={styles.itemCard}
+          >
+            <View style={styles.itemHeader}>
+              <Text style={styles.itemNumber}>Item {i + 1}</Text>
+              {items.length > 1 && (
+                <PressableScale
+                  onPress={() => {
+                    Haptics.light();
+                    removeItem(i);
+                  }}
+                  style={styles.xBtn}
+                  haptic="light"
+                  scaleTo={0.88}
+                >
+                  <Ionicons name="close" size={14} color="#6B6B76" />
+                </PressableScale>
+              )}
             </View>
-            <View style={[styles.field, { flex: 1.6 }]}>
-              <Text style={styles.fieldLabel}>Value (CAD)</Text>
-              <TextInput
-                style={styles.input}
-                inputMode="decimal"
-                placeholder="0.00"
-                placeholderTextColor="#9A9AA4"
-                value={it.value}
-                onChangeText={(v) => updateItem(i, { value: v })}
-              />
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Description *</Text>
+              <View style={[styles.inputWrap, tch.description && errs.description ? styles.inputWrapError : null]}>
+                <TextInput
+                  ref={(r) => { inputRefs.current[`${i}-description`] = r; }}
+                  style={styles.input}
+                  placeholder="Cotton t-shirt"
+                  placeholderTextColor="#9A9AA4"
+                  value={it.description}
+                  onChangeText={(v) => { updateItem(i, { description: v }); markTouched(i, 'description'); }}
+                  onBlur={() => markTouched(i, 'description')}
+                  returnKeyType="next"
+                />
+              </View>
+              {tch.description && errs.description ? (
+                <Text style={styles.errorText}>{errs.description}</Text>
+              ) : null}
             </View>
-          </View>
-          <View style={styles.row}>
-            <View style={[styles.field, { flex: 1 }]}>
-              <Text style={styles.fieldLabel}>Origin</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Canada"
-                placeholderTextColor="#9A9AA4"
-                value={it.origin}
-                onChangeText={(v) => updateItem(i, { origin: v })}
-              />
+            <View style={styles.row}>
+              <View style={[styles.field, { flex: 1 }]}>
+                <Text style={styles.fieldLabel}>Qty *</Text>
+                <View style={[styles.inputWrap, tch.quantity && errs.quantity ? styles.inputWrapError : null]}>
+                  <TextInput
+                    ref={(r) => { inputRefs.current[`${i}-quantity`] = r; }}
+                    style={styles.input}
+                    inputMode="numeric"
+                    placeholder="1"
+                    placeholderTextColor="#9A9AA4"
+                    value={it.quantity}
+                    onChangeText={(v) => { updateItem(i, { quantity: v }); markTouched(i, 'quantity'); }}
+                    onBlur={() => markTouched(i, 'quantity')}
+                    returnKeyType="next"
+                  />
+                </View>
+                {tch.quantity && errs.quantity ? (
+                  <Text style={styles.errorText}>{errs.quantity}</Text>
+                ) : null}
+              </View>
+              <View style={[styles.field, { flex: 1.6 }]}>
+                <Text style={styles.fieldLabel}>Value (CAD) *</Text>
+                <View style={[styles.inputWrap, tch.value && errs.value ? styles.inputWrapError : null]}>
+                  <TextInput
+                    ref={(r) => { inputRefs.current[`${i}-value`] = r; }}
+                    style={styles.input}
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    placeholderTextColor="#9A9AA4"
+                    value={it.value}
+                    onChangeText={(v) => { updateItem(i, { value: v }); markTouched(i, 'value'); }}
+                    onBlur={() => markTouched(i, 'value')}
+                    returnKeyType="next"
+                  />
+                </View>
+                {tch.value && errs.value ? (
+                  <Text style={styles.errorText}>{errs.value}</Text>
+                ) : null}
+              </View>
             </View>
-            <View style={[styles.field, { flex: 1 }]}>
-              <Text style={styles.fieldLabel}>HS code</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="6109.10"
-                placeholderTextColor="#9A9AA4"
-                value={it.hsCode}
-                onChangeText={(v) => updateItem(i, { hsCode: v })}
-              />
+            <View style={styles.row}>
+              <View style={[styles.field, { flex: 1 }]}>
+                <Text style={styles.fieldLabel}>Origin *</Text>
+                <View style={[styles.inputWrap, tch.origin && errs.origin ? styles.inputWrapError : null]}>
+                  <TextInput
+                    ref={(r) => { inputRefs.current[`${i}-origin`] = r; }}
+                    style={styles.input}
+                    placeholder="Canada"
+                    placeholderTextColor="#9A9AA4"
+                    value={it.origin}
+                    onChangeText={(v) => { updateItem(i, { origin: v }); markTouched(i, 'origin'); }}
+                    onBlur={() => markTouched(i, 'origin')}
+                    returnKeyType="next"
+                    autoComplete="country"
+                    textContentType="countryName"
+                  />
+                </View>
+                {tch.origin && errs.origin ? (
+                  <Text style={styles.errorText}>{errs.origin}</Text>
+                ) : null}
+              </View>
+              <View style={[styles.field, { flex: 1 }]}>
+                <Text style={styles.fieldLabel}>HS code</Text>
+                <View style={[styles.inputWrap, tch.hsCode && errs.hsCode ? styles.inputWrapError : null]}>
+                  <TextInput
+                    ref={(r) => { inputRefs.current[`${i}-hsCode`] = r; }}
+                    style={styles.input}
+                    placeholder="6109.10"
+                    placeholderTextColor="#9A9AA4"
+                    value={it.hsCode}
+                    onChangeText={(v) => { updateItem(i, { hsCode: v }); markTouched(i, 'hsCode'); }}
+                    onBlur={() => markTouched(i, 'hsCode')}
+                    keyboardType="number-pad"
+                    returnKeyType="done"
+                  />
+                </View>
+                {tch.hsCode && errs.hsCode ? (
+                <Text style={styles.errorText}>{errs.hsCode}</Text>
+              ) : null}
             </View>
-          </View>
-        </View>
-      ))}
+            </View>
+          </Animated.View>
+        );
+      })}
 
-      {/* Add Item */}
-      <TouchableOpacity style={styles.addBtn} onPress={addItem}>
+      <PressableScale style={styles.addBtn} onPress={() => { Haptics.light(); addItem(); }} haptic="light">
         <Ionicons name="add" size={17} color="#635BFF" />
         <Text style={styles.addBtnText}>Add another item</Text>
-      </TouchableOpacity>
+      </PressableScale>
 
-      {/* Total */}
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Declared value</Text>
         <Text style={styles.totalValue}>${totalValue.toFixed(2)}</Text>
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: { gap: 14 },
@@ -227,15 +367,31 @@ const styles = StyleSheet.create({
   },
   field: { gap: 7, marginBottom: 11 },
   fieldLabel: { fontSize: 13, fontWeight: '600', color: '#6B6B76', paddingLeft: 2 },
-  input: {
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
     height: 50,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(10,10,20,0.07)',
     backgroundColor: '#F7F7F9',
     paddingHorizontal: 15,
+  },
+  inputWrapError: {
+    borderColor: '#E0483D',
+    backgroundColor: '#FFF7F7',
+  },
+  input: {
+    flex: 1,
     fontSize: 16,
     color: '#0B0B12',
+    padding: 0,
+  },
+  errorText: {
+    fontSize: 12.5,
+    color: '#E0483D',
+    marginTop: 4,
+    fontWeight: '500',
   },
   row: { flexDirection: 'row', gap: 12 },
   addBtn: {

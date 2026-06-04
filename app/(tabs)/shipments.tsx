@@ -1,73 +1,88 @@
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState, useCallback } from 'react';
+import { useCallback, useState } from 'react';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useShipments } from '@/lib/queries';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
+import { PressableCard, PressableScale } from '@/components/PressableScale';
+import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { colors, spacing, borderRadius } from '@/lib/theme';
+import * as Haptics from '@/lib/haptics';
 
 const STATUS_TABS = ['All', 'Active', 'Delivered'];
 
+const STATUS_FILTER: Record<string, string> = {
+  All: undefined as unknown as string,
+  Active: '^(pending|label-created|picked-up|in-transit|out-for-delivery)$',
+  Delivered: '^delivered$',
+};
+
 function EmptyState() {
   return (
-    <View style={styles.empty}>
+    <Animated.View entering={FadeInDown.duration(400)} style={styles.empty}>
       <View style={styles.emptyIcon}>
         <Ionicons name="cube-outline" size={36} color={colors.faint} />
       </View>
       <Text style={styles.emptyTitle}>No shipments yet</Text>
       <Text style={styles.emptySub}>Create your first label to get started</Text>
-    </View>
+    </Animated.View>
   );
 }
 
-function ShipmentCard({ shipment }: { shipment: any }) {
+function ShipmentCard({ shipment, index }: { shipment: any; index: number }) {
   return (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.7}
-      onPress={() => router.push(`/shipments/${shipment.shipCode}`)}
+    <Animated.View
+      entering={FadeInDown.duration(380).delay(Math.min(index, 12) * 50)}
+      layout={LinearTransition.springify().damping(20).stiffness(200)}
     >
-      <View style={styles.cardTop}>
-        <View style={styles.pkgIcon}>
-          <Ionicons name="cube" size={20} color={colors.muted} />
-        </View>
-        <View style={styles.routeSection}>
-          <View style={styles.routeEnd}>
-            <Text style={styles.routeLbl}>From</Text>
-            <Text style={styles.routeCity} numberOfLines={1}>
-              {shipment.items?.[0]?.description || 'Sender'}
-            </Text>
+      <PressableCard
+        style={styles.card}
+        onPress={() => router.push(`/shipments/${shipment.shipCode}`)}
+        haptic="light"
+      >
+        <View style={styles.cardTop}>
+          <View style={styles.pkgIcon}>
+            <Ionicons name="cube" size={20} color={colors.muted} />
           </View>
-          <View style={styles.routeLine}>
-            <View style={styles.routeTruck}>
-              <Ionicons name="car" size={12} color={colors.accent} />
+          <View style={styles.routeSection}>
+            <View style={styles.routeEnd}>
+              <Text style={styles.routeLbl}>From</Text>
+              <Text style={styles.routeCity} numberOfLines={1}>
+                {shipment.items?.[0]?.description || 'Sender'}
+              </Text>
+            </View>
+            <View style={styles.routeLine}>
+              <View style={styles.routeTruck}>
+                <Ionicons name="car" size={12} color={colors.accent} />
+              </View>
+            </View>
+            <View style={styles.routeEnd}>
+              <Text style={styles.routeLbl}>To</Text>
+              <Text style={styles.routeCity} numberOfLines={1}>
+                {shipment.recipientCity}, {shipment.recipientProvinceCode}
+              </Text>
             </View>
           </View>
-          <View style={styles.routeEnd}>
-            <Text style={styles.routeLbl}>To</Text>
-            <Text style={styles.routeCity} numberOfLines={1}>
-              {shipment.recipientCity}, {shipment.recipientProvinceCode}
-            </Text>
-          </View>
+          <Badge status={shipment.status} />
         </View>
-        <Badge status={shipment.status} />
-      </View>
 
-      <View style={styles.cardFooter}>
-        <View style={styles.footerLeft}>
-          {shipment.service && (
-            <Text style={styles.carrierText}>{shipment.service}</Text>
-          )}
-          {shipment.trackingCode && (
-            <Text style={styles.trackingText} numberOfLines={1}>
-              {shipment.trackingCode}
-            </Text>
-          )}
+        <View style={styles.cardFooter}>
+          <View style={styles.footerLeft}>
+            {shipment.service && (
+              <Text style={styles.carrierText}>{shipment.service}</Text>
+            )}
+            {shipment.trackingCode && (
+              <Text style={styles.trackingText} numberOfLines={1}>
+                {shipment.trackingCode}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.priceText}>${shipment.customerTotal.toFixed(2)}</Text>
         </View>
-        <Text style={styles.priceText}>${shipment.customerTotal.toFixed(2)}</Text>
-      </View>
-    </TouchableOpacity>
+      </PressableCard>
+    </Animated.View>
   );
 }
 
@@ -100,11 +115,12 @@ function LoadingSkeleton() {
 export default function ShipmentsScreen() {
   const [tab, setTab] = useState('All');
   const [search, setSearch] = useState('');
-  const { data, refetch, isLoading } = useShipments(1, tab === 'All' ? undefined : tab.toLowerCase());
+  const { data, refetch, isLoading } = useShipments(1, STATUS_FILTER[tab]);
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    Haptics.medium();
     await refetch();
     setRefreshing(false);
   }, [refetch]);
@@ -121,16 +137,12 @@ export default function ShipmentsScreen() {
     : shipments;
 
   return (
-    <View style={styles.container}>
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.shipCode}
-        renderItem={({ item }) => <ShipmentCard shipment={item} />}
-        contentContainerStyle={styles.content}
-        ListHeaderComponent={
-          <>
-            <Text style={styles.title}>Shipments</Text>
+    <AnimatedScreen direction="fade-up">
+      <View style={styles.container}>
+        <View style={styles.headerWrap}>
+          <Animated.Text entering={FadeInDown.duration(380)} style={styles.title}>Shipments</Animated.Text>
 
+          <Animated.View entering={FadeInDown.duration(380).delay(50)}>
             <View style={styles.searchBar}>
               <Ionicons name="search" size={18} color={colors.faint} />
               <TextInput
@@ -141,29 +153,43 @@ export default function ShipmentsScreen() {
                 onChangeText={setSearch}
               />
             </View>
+          </Animated.View>
 
+          <Animated.View entering={FadeInDown.duration(380).delay(100)}>
             <View style={styles.segment}>
               {STATUS_TABS.map((t) => (
-                <TouchableOpacity
+                <PressableScale
                   key={t}
                   style={[styles.segBtn, tab === t && styles.segBtnActive]}
-                  onPress={() => setTab(t)}
+                  onPress={() => {
+                    if (t !== tab) Haptics.light();
+                    setTab(t);
+                  }}
+                  haptic="light"
+                  scaleTo={0.96}
                 >
                   <Text style={[styles.segText, tab === t && styles.segTextActive]}>
                     {t}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </View>
-          </>
-        }
-        ListEmptyComponent={isLoading ? <LoadingSkeleton /> : <EmptyState />}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
-        }
-        showsVerticalScrollIndicator={false}
-      />
-    </View>
+          </Animated.View>
+        </View>
+
+        <Animated.FlatList
+          data={filtered}
+          keyExtractor={(item) => item.shipCode}
+          renderItem={({ item, index }) => <ShipmentCard shipment={item} index={index} />}
+          contentContainerStyle={styles.content}
+          ListEmptyComponent={isLoading ? <LoadingSkeleton /> : <EmptyState />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+    </AnimatedScreen>
   );
 }
 
@@ -175,6 +201,10 @@ const styles = StyleSheet.create({
   content: {
     padding: spacing.xl,
     paddingBottom: 40,
+  },
+  headerWrap: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.sm,
   },
   title: {
     fontSize: 32,

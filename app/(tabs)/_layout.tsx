@@ -1,14 +1,86 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, type ColorValue } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useEffect } from 'react';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { colors } from '@/lib/theme';
+import * as Haptics from '@/lib/haptics';
 
-const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  index: 'home',
-  shipments: 'cube',
-  wizard: 'add-circle',
-  wallet: 'wallet',
-  profile: 'person',
-};
+interface BouncingIconProps {
+  name: keyof typeof Ionicons.glyphMap;
+  color: ColorValue;
+  size: number;
+  focused: boolean;
+}
+
+function BouncingIcon({ name, color, size, focused }: BouncingIconProps) {
+  const scale = useSharedValue(1);
+  const translateY = useSharedValue(0);
+
+  useEffect(() => {
+    if (focused) {
+      scale.value = withSequence(
+        withTiming(1.22, { duration: 120 }),
+        withSpring(1, { damping: 8, stiffness: 220 }),
+      );
+      translateY.value = withSequence(
+        withTiming(-3, { duration: 120 }),
+        withSpring(0, { damping: 10, stiffness: 220 }),
+      );
+      Haptics.light();
+    } else {
+      scale.value = withSpring(1, { damping: 14, stiffness: 220 });
+      translateY.value = withSpring(0, { damping: 14, stiffness: 220 });
+    }
+  }, [focused, scale, translateY]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }, { translateY: translateY.value }],
+  }));
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <Ionicons name={name} size={size} color={color as string} />
+    </Animated.View>
+  );
+}
+
+interface FabButtonProps {
+  focused: boolean;
+}
+
+function FabButton({ focused }: FabButtonProps) {
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    if (focused) {
+      scale.value = withSequence(
+        withTiming(1.1, { duration: 120 }),
+        withSpring(1, { damping: 8, stiffness: 220 }),
+      );
+    } else {
+      scale.value = withSpring(1, { damping: 14, stiffness: 220 });
+    }
+  }, [focused, scale]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <View style={styles.fabContainer}>
+      <Animated.View style={[styles.fab, animatedStyle]}>
+        <Ionicons name="add" size={28} color="#fff" />
+      </Animated.View>
+    </View>
+  );
+}
 
 export default function TabLayout() {
   return (
@@ -16,8 +88,8 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: '#635BFF',
-        tabBarInactiveTintColor: '#9A9AA4',
+        tabBarActiveTintColor: colors.accent as any,
+        tabBarInactiveTintColor: colors.faint as any,
         tabBarLabelStyle: styles.tabLabel,
       }}
     >
@@ -25,8 +97,8 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="home" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -34,8 +106,8 @@ export default function TabLayout() {
         name="shipments"
         options={{
           title: 'Shipments',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cube" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="cube" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -43,21 +115,15 @@ export default function TabLayout() {
         name="wizard-fab"
         options={{
           title: '',
-          tabBarButton: () => (
-            <View style={styles.fabContainer}>
-              <View style={styles.fab}>
-                <Ionicons name="add" size={28} color="#fff" />
-              </View>
-            </View>
-          ),
+          tabBarButton: () => <FabButton focused={false} />,
         }}
       />
       <Tabs.Screen
         name="wallet"
         options={{
           title: 'Wallet',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="wallet" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -65,8 +131,42 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="person" color={color} size={size} focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="shipments"
+        options={{
+          title: 'Shipments',
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="cube" color={color} size={size} focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="wizard-fab"
+        options={{
+          title: '',
+          tabBarButton: (props: any) => <FabButton focused={props.focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: 'Wallet',
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="wallet" color={color} size={size} focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color, size, focused }) => (
+            <BouncingIcon name="person" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -97,10 +197,10 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 20,
-    backgroundColor: '#635BFF',
+    backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#635BFF',
+    shadowColor: colors.accent,
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.4,
     shadowRadius: 20,

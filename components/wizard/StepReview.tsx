@@ -1,49 +1,44 @@
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import type { WizardState } from './types';
-
-const RATES = [
-  { id: 'ECO', post: 9.85 },
-  { id: 'TRK', post: 14.20 },
-  { id: 'EXP', post: 18.94 },
-  { id: 'PRI', post: 26.40 },
-];
 
 interface Props {
   state: WizardState;
   balance: number;
+  total?: number;
+  rateName?: string;
+  rateDays?: string;
+  subtotal?: number;
+  tax?: number;
 }
 
-export function StepReview({ state, balance }: Props) {
-  const rate = RATES.find((r) => r.id === state.rateId) || RATES[1];
-  const hst = rate.post * 0.13;
-  const total = rate.post * 1.13;
+export function StepReview({
+  state,
+  balance,
+  total: totalProp,
+  rateName: rateNameProp,
+  rateDays: rateDaysProp,
+  subtotal: subtotalProp,
+  tax: taxProp,
+}: Props) {
+  const subtotal = subtotalProp ?? 0;
+  const tax = taxProp ?? subtotal * 0.13;
+  const total = totalProp ?? subtotal + tax;
   const after = balance - total;
   const ok = after >= 0;
 
-  const rateName = {
-    ECO: 'Stallion Economy',
-    TRK: 'Stallion Tracked',
-    EXP: 'Stallion Express',
-    PRI: 'Stallion Priority',
-  }[state.rateId] || 'Stallion Tracked';
-
-  const rateDays = {
-    ECO: '5–8 business days',
-    TRK: '3–5 business days',
-    EXP: '2–3 business days',
-    PRI: '1–2 business days',
-  }[state.rateId] || '3–5 business days';
+  const rateName = rateNameProp || 'Stallion Tracked';
+  const rateDays = rateDaysProp || '3–5 business days';
 
   return (
     <View style={styles.container}>
-      {/* Rate Summary */}
-      <View style={styles.summaryCard}>
+      <Animated.View entering={FadeInDown.duration(360)} style={styles.summaryCard}>
         <View style={styles.summaryRow}>
           <View style={styles.pkgIcon}>
             <Ionicons name="cube" size={24} color="#635BFF" />
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.rateName}>{rateName}</Text>
             <Text style={styles.rateDays}>{rateDays}</Text>
           </View>
@@ -61,27 +56,24 @@ export function StepReview({ state, balance }: Props) {
             </Text>
           </View>
         </View>
-      </View>
+      </Animated.View>
 
-      {/* Price Breakdown */}
-      <View style={styles.priceCard}>
-        {([
-          ['Postage', rate.post],
-          ['HST (13%)', hst],
-        ] as [string, number][]).map(([label, value]) => (
-          <View key={label} style={styles.priceRow}>
-            <Text style={styles.priceLabel}>{label}</Text>
-            <Text style={styles.priceValue}>${value.toFixed(2)}</Text>
-          </View>
-        ))}
+      <Animated.View entering={FadeInDown.duration(360).delay(120)} style={styles.priceCard}>
+        <View style={styles.priceRow}>
+          <Text style={styles.priceLabel}>Postage</Text>
+          <Text style={styles.priceValue}>${subtotal.toFixed(2)}</Text>
+        </View>
+        <View style={styles.priceRow}>
+          <Text style={styles.priceLabel}>HST (13%)</Text>
+          <Text style={styles.priceValue}>${tax.toFixed(2)}</Text>
+        </View>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Total</Text>
           <Text style={styles.totalValue}>${total.toFixed(2)}</Text>
         </View>
-      </View>
+      </Animated.View>
 
-      {/* Wallet Check */}
-      <View style={[styles.walletCheck, ok && styles.walletOk]}>
+      <Animated.View entering={FadeInUp.duration(360).delay(240)} style={[styles.walletCheck, ok && styles.walletOk]}>
         <View style={[styles.walletIcon, ok && styles.walletIconOk]}>
           <Ionicons
             name="wallet"
@@ -91,7 +83,7 @@ export function StepReview({ state, balance }: Props) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.walletTitle}>
-            {ok ? 'Paid from wallet' : 'Insufficient balance'}
+            {ok ? 'Pay with wallet' : 'Insufficient balance'}
           </Text>
           <Text style={styles.walletSub}>
             {ok
@@ -100,9 +92,9 @@ export function StepReview({ state, balance }: Props) {
           </Text>
         </View>
         {ok && (
-          <Text style={styles.walletCheckmark}>✓</Text>
+          <Ionicons name="checkmark-circle" size={22} color="#1E9E6A" />
         )}
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -113,6 +105,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 22,
     padding: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,20,0.045)',
   },
   summaryRow: { flexDirection: 'row', gap: 14, alignItems: 'center' },
   pkgIcon: {
@@ -145,6 +139,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 22,
     padding: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,20,0.045)',
   },
   priceRow: {
     flexDirection: 'row',
@@ -182,5 +178,4 @@ const styles = StyleSheet.create({
   walletIconOk: { backgroundColor: 'rgba(30,158,106,0.15)' },
   walletTitle: { fontSize: 14, fontWeight: '600', color: '#0B0B12' },
   walletSub: { fontSize: 12.5, color: '#9A9AA4', marginTop: 1 },
-  walletCheckmark: { fontSize: 14, fontWeight: '700', color: '#1E9E6A' },
 });

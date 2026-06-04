@@ -1,7 +1,17 @@
-import { View, Text, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TextInput } from 'react-native';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import type { WizardState } from './types';
 import { PACKAGE_TYPES, WEIGHT_UNITS, DIM_UNITS } from './types';
+import { validateWeight, validateDimensions } from '@/lib/validation';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
+
+export interface StepPackageRef {
+  validate: () => boolean;
+  focusFirstError: () => void;
+}
 
 interface Props {
   state: WizardState;
@@ -9,12 +19,49 @@ interface Props {
   onOpenSku: () => void;
 }
 
-export function StepPackage({ state, set, onOpenSku }: Props) {
+export const StepPackage = forwardRef<StepPackageRef, Props>(function StepPackage({ state, set, onOpenSku }, ref) {
+  const [errors, setErrors] = useState<{ weight?: string; dimensions?: string }>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const weightRef = useRef<TextInput>(null);
+  const lengthRef = useRef<TextInput>(null);
+  const widthRef = useRef<TextInput>(null);
+  const heightRef = useRef<TextInput>(null);
+
+  const unit = state.weightUnit as 'kg' | 'lb';
+  const dimUnit = state.dimUnit as 'cm' | 'in';
+
+  const validate = (): boolean => {
+    const w = parseFloat(state.weight);
+    const wErr = validateWeight(w, unit);
+    const l = parseFloat(state.length);
+    const wid = parseFloat(state.width);
+    const h = parseFloat(state.height);
+    const dErr = validateDimensions(l, wid, h, dimUnit);
+    const next: typeof errors = {};
+    if (wErr) next.weight = wErr;
+    if (dErr) next.dimensions = dErr;
+    setErrors(next);
+    return !next.weight && !next.dimensions;
+  };
+
+  useImperativeHandle(ref, () => ({
+    validate,
+    focusFirstError: () => {
+      if (errors.weight) weightRef.current?.focus();
+      else if (errors.dimensions) lengthRef.current?.focus();
+    },
+  }), [errors]);
+
+  useEffect(() => {
+    if (touched.weight || touched.length || touched.width || touched.height) {
+      validate();
+    }
+  }, [state.weight, state.length, state.width, state.height, state.weightUnit, state.dimUnit, touched.weight, touched.length, touched.width, touched.height]);
+
   return (
     <View style={styles.container}>
-      {/* SKU Apply */}
       {state.appliedSku ? (
-        <TouchableOpacity style={styles.skuApplied} onPress={onOpenSku}>
+        <PressableScale style={styles.skuApplied} onPress={onOpenSku} haptic="light">
           <View style={styles.skuAvatar}>
             <Text style={styles.skuEmoji}>
               {state.appliedSku.name.charAt(0).toUpperCase()}
@@ -28,9 +75,9 @@ export function StepPackage({ state, set, onOpenSku }: Props) {
             <Text style={styles.skuMeta}>Auto-filled · {state.appliedSku.sku}</Text>
           </View>
           <Text style={styles.changeText}>Change</Text>
-        </TouchableOpacity>
+        </PressableScale>
       ) : (
-        <TouchableOpacity style={styles.quickSku} onPress={onOpenSku}>
+        <PressableScale style={styles.quickSku} onPress={onOpenSku} haptic="light">
           <View style={styles.quickSkuIcon}>
             <Ionicons name="sparkles" size={18} color="#fff" />
           </View>
@@ -39,83 +86,105 @@ export function StepPackage({ state, set, onOpenSku }: Props) {
             <Text style={styles.quickSkuSub}>Skip the form — fill from a saved product</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#9A9AA4" />
-        </TouchableOpacity>
+        </PressableScale>
       )}
 
-      {/* Divider */}
       <View style={styles.divider}>
         <Text style={styles.dividerText}>
           {state.appliedSku ? 'or edit manually' : 'or enter manually'}
         </Text>
       </View>
 
-      {/* Package Type */}
       <Text style={styles.eyebrow}>Package type</Text>
       <View style={styles.typeGrid}>
-        {PACKAGE_TYPES.map((t) => (
-          <TouchableOpacity
+        {PACKAGE_TYPES.map((t, i) => (
+          <Animated.View
             key={t}
-            style={[styles.typeCard, state.packageType === t && styles.typeCardSel]}
-            onPress={() => set({ packageType: t })}
+            entering={FadeInDown.duration(360).delay(i * 60)}
+            style={{ flex: 1 }}
           >
-            <Ionicons
-              name={t === 'Box / Parcel' ? 'cube' : t === 'Soft pack' ? 'gift' : 'document'}
-              size={24}
-              color={state.packageType === t ? '#635BFF' : '#6B6B76'}
-            />
-            <Text style={[styles.typeLabel, state.packageType === t && styles.typeLabelSel]}>
-              {t}
-            </Text>
-          </TouchableOpacity>
+            <PressableScale
+              style={[styles.typeCard, state.packageType === t && styles.typeCardSel]}
+              onPress={() => {
+                Haptics.light();
+                set({ packageType: t });
+              }}
+              haptic="light"
+            >
+              <Ionicons
+                name={t === 'Box / Parcel' ? 'cube' : t === 'Soft pack' ? 'gift' : 'document'}
+                size={24}
+                color={state.packageType === t ? '#635BFF' : '#6B6B76'}
+              />
+              <Text style={[styles.typeLabel, state.packageType === t && styles.typeLabelSel]}>
+                {t}
+              </Text>
+            </PressableScale>
+          </Animated.View>
         ))}
       </View>
 
-      {/* Weight */}
       <View style={styles.weightCard}>
         <View style={styles.weightHeader}>
-          <Text style={styles.weightLabel}>Weight</Text>
+          <Text style={styles.weightLabel}>Weight *</Text>
           <View style={styles.unitSeg}>
             {WEIGHT_UNITS.map((u) => (
-              <TouchableOpacity
+              <PressableScale
                 key={u}
                 style={[styles.unitBtn, state.weightUnit === u && styles.unitBtnOn]}
-                onPress={() => set({ weightUnit: u })}
+                onPress={() => {
+                  Haptics.light();
+                  set({ weightUnit: u });
+                }}
+                haptic="light"
+                scaleTo={0.92}
               >
                 <Text style={[styles.unitText, state.weightUnit === u && styles.unitTextOn]}>
                   {u}
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
         </View>
         <View style={styles.bigInput}>
           <TextInput
-            style={styles.bigField}
+            ref={weightRef}
+            style={[styles.bigField, errors.weight && touched.weight ? styles.bigFieldError : null]}
             inputMode="decimal"
             placeholder="0.0"
             placeholderTextColor="#9A9AA4"
             value={state.weight}
-            onChangeText={(v) => set({ weight: v })}
+            onChangeText={(v) => { set({ weight: v }); setTouched((t) => ({ ...t, weight: true })); }}
+            onBlur={() => setTouched((t) => ({ ...t, weight: true }))}
+            returnKeyType="next"
+            onSubmitEditing={() => lengthRef.current?.focus()}
           />
           <Text style={styles.bigUnit}>{state.weightUnit}</Text>
         </View>
+        {touched.weight && errors.weight ? (
+          <Text style={styles.errorText}>{errors.weight}</Text>
+        ) : null}
       </View>
 
-      {/* Dimensions */}
       <View style={styles.dimsCard}>
         <View style={styles.dimsHeader}>
           <Text style={styles.weightLabel}>Dimensions</Text>
           <View style={styles.unitSeg}>
             {DIM_UNITS.map((u) => (
-              <TouchableOpacity
+              <PressableScale
                 key={u}
                 style={[styles.unitBtn, state.dimUnit === u && styles.unitBtnOn]}
-                onPress={() => set({ dimUnit: u })}
+                onPress={() => {
+                  Haptics.light();
+                  set({ dimUnit: u });
+                }}
+                haptic="light"
+                scaleTo={0.92}
               >
                 <Text style={[styles.unitText, state.dimUnit === u && styles.unitTextOn]}>
                   {u}
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
         </View>
@@ -123,12 +192,19 @@ export function StepPackage({ state, set, onOpenSku }: Props) {
           {(['length', 'width', 'height'] as const).map((k) => (
             <View key={k} style={styles.dimField}>
               <TextInput
+                ref={k === 'length' ? lengthRef : k === 'width' ? widthRef : heightRef}
                 style={styles.dimInput}
                 inputMode="decimal"
                 placeholder="0"
                 placeholderTextColor="#9A9AA4"
                 value={state[k]}
-                onChangeText={(v) => set({ [k]: v })}
+                onChangeText={(v) => { set({ [k]: v }); setTouched((t) => ({ ...t, [k]: true })); }}
+                onBlur={() => setTouched((t) => ({ ...t, [k]: true }))}
+                returnKeyType={k === 'height' ? 'done' : 'next'}
+                onSubmitEditing={() => {
+                  if (k === 'length') widthRef.current?.focus();
+                  else if (k === 'width') heightRef.current?.focus();
+                }}
               />
               <Text style={styles.dimLabel}>
                 {k === 'length' ? 'L' : k === 'width' ? 'W' : 'H'}
@@ -136,10 +212,13 @@ export function StepPackage({ state, set, onOpenSku }: Props) {
             </View>
           ))}
         </View>
+        {touched.length && errors.dimensions ? (
+          <Text style={styles.errorText}>{errors.dimensions}</Text>
+        ) : null}
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: { gap: 16 },
@@ -249,7 +328,16 @@ const styles = StyleSheet.create({
     color: '#0B0B12',
     padding: 0,
   },
+  bigFieldError: {
+    color: '#E0483D',
+  },
   bigUnit: { fontSize: 22, fontWeight: '600', color: '#9A9AA4' },
+  errorText: {
+    fontSize: 12.5,
+    color: '#E0483D',
+    marginTop: 6,
+    fontWeight: '500',
+  },
   dimsCard: { backgroundColor: '#fff', borderRadius: 22, padding: 16 },
   dimsHeader: {
     flexDirection: 'row',

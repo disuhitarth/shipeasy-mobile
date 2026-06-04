@@ -1,17 +1,47 @@
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Modal, ActivityIndicator, Alert, RefreshControl } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import type { TextInput as RNTextInput } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSKUs, useCreateSKU, useUpdateSKU, useDeleteSKU } from '@/lib/queries';
 import type { SKU } from '@/types';
 import { colors, spacing, borderRadius } from '@/lib/theme';
+import { validateRequired, validateHSCode, validateAmount, validateForm, type ValidationResult } from '@/lib/validation';
+import { toast } from '@/lib/toast';
+import { FormField } from '@/components/ui/FormField';
+import { AnimatedScreen } from '@/components/AnimatedScreen';
+import { Sheet } from '@/components/Sheet';
+import { PressableCard, PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
+
+type FormShape = {
+  sku: string;
+  name: string;
+  description: string;
+  hsCode: string;
+  countryOfOrigin: string;
+  defaultValue: string;
+  defaultQuantity: string;
+  requiresSignature: boolean;
+  requiresInsurance: boolean;
+};
+
+const EMPTY_FORM: FormShape = {
+  sku: '', name: '', description: '', hsCode: '', countryOfOrigin: '',
+  defaultValue: '', defaultQuantity: '1',
+  requiresSignature: false, requiresInsurance: false,
+};
 
 export default function SKUsScreen() {
   const { data: skus, isLoading, refetch } = useSKUs();
   const [refreshing, setRefreshing] = useState(false);
+  const insets = useSafeAreaInsets();
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    Haptics.medium();
     await refetch();
     setRefreshing(false);
   }, [refetch]);
@@ -23,11 +53,43 @@ export default function SKUsScreen() {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    sku: '', name: '', description: '', hsCode: '', countryOfOrigin: '',
-    defaultValue: '', defaultQuantity: '1',
-    requiresSignature: false, requiresInsurance: false,
-  });
+  const [form, setForm] = useState<FormShape>(EMPTY_FORM);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  const skuRef = useRef<RNTextInput>(null);
+  const nameRef = useRef<RNTextInput>(null);
+  const descRef = useRef<RNTextInput>(null);
+  const hsRef = useRef<RNTextInput>(null);
+  const countryRef = useRef<RNTextInput>(null);
+  const valueRef = useRef<RNTextInput>(null);
+  const qtyRef = useRef<RNTextInput>(null);
+
+  const validate = useCallback((): ValidationResult => {
+    const r = validateForm(form, {
+      sku: (v) => validateRequired(String(v ?? '').trim(), 'SKU code'),
+      name: (v) => validateRequired(String(v ?? '').trim(), 'Name'),
+      hsCode: (v) => validateHSCode(String(v ?? '')),
+      defaultValue: (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return null;
+        const n = parseFloat(s);
+        if (Number.isNaN(n)) return 'Enter a valid value';
+        return validateAmount(n, 0, 100000);
+      },
+      defaultQuantity: (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Quantity is required';
+        const n = parseInt(s, 10);
+        if (Number.isNaN(n)) return 'Enter a whole number';
+        if (n < 1) return 'Min 1';
+        if (n > 9999) return 'Max 9999';
+        return null;
+      },
+    });
+    setErrors(r.errors);
+    return r;
+  }, [form]);
 
   const filtered = useMemo(() => {
     if (!skus) return [];
@@ -39,7 +101,9 @@ export default function SKUsScreen() {
 
   const openCreate = useCallback(() => {
     setEditId(null);
-    setForm({ sku: '', name: '', description: '', hsCode: '', countryOfOrigin: '', defaultValue: '', defaultQuantity: '1', requiresSignature: false, requiresInsurance: false });
+    setForm(EMPTY_FORM);
+    setErrors({});
+    setTouched({});
     setModal(true);
   }, []);
 
@@ -53,212 +117,381 @@ export default function SKUsScreen() {
       requiresSignature: sku.requiresSignature,
       requiresInsurance: sku.requiresInsurance,
     });
+    setErrors({});
+    setTouched({});
     setModal(true);
   }, []);
 
+  const onFieldChange = useCallback((key: keyof FormShape, value: string) => {
+    const final = key === 'sku' ? value.toUpperCase() : value;
+    setForm((f) => {
+      const next = { ...f, [key]: final };
+      if (touched[key]) {
+        setTimeout(() => {
+          const r = validateForm(next, {
+            sku: (v) => validateRequired(String(v ?? '').trim(), 'SKU code'),
+            name: (v) => validateRequired(String(v ?? '').trim(), 'Name'),
+            hsCode: (v) => validateHSCode(String(v ?? '')),
+            defaultValue: (v) => {
+              const s = String(v ?? '').trim();
+              if (!s) return null;
+              const n = parseFloat(s);
+              if (Number.isNaN(n)) return 'Enter a valid value';
+              return validateAmount(n, 0, 100000);
+            },
+            defaultQuantity: (v) => {
+              const s = String(v ?? '').trim();
+              if (!s) return 'Quantity is required';
+              const n = parseInt(s, 10);
+              if (Number.isNaN(n)) return 'Enter a whole number';
+              if (n < 1) return 'Min 1';
+              if (n > 9999) return 'Max 9999';
+              return null;
+            },
+          });
+          setErrors(r.errors);
+        }, 0);
+      }
+      return next;
+    });
+  }, [touched]);
+
+  const onFieldBlur = useCallback((key: keyof FormShape) => {
+    setTouched((t) => ({ ...t, [key]: true }));
+    setTimeout(() => validate(), 0);
+  }, [validate]);
+
   const save = useCallback(async () => {
+    setTouched({
+      sku: true, name: true, hsCode: true,
+      defaultValue: true, defaultQuantity: true,
+    });
+    const r = validate();
+    if (!r.isValid) {
+      const order: (keyof FormShape)[] = ['sku', 'name', 'hsCode', 'defaultValue', 'defaultQuantity'];
+      const first = order.find((k) => r.errors[k]);
+      const refMap: Partial<Record<keyof FormShape, React.RefObject<RNTextInput | null>>> = {
+        sku: skuRef, name: nameRef, hsCode: hsRef,
+        defaultValue: valueRef, defaultQuantity: qtyRef,
+      };
+      if (first) refMap[first]?.current?.focus();
+      toast.error('Please fix the highlighted fields');
+      return;
+    }
     const payload = {
       sku: form.sku.toUpperCase(),
-      name: form.name,
-      description: form.description,
-      hsCode: form.hsCode,
-      countryOfOrigin: form.countryOfOrigin,
+      name: form.name.trim(),
+      description: form.description.trim(),
+      hsCode: form.hsCode.trim(),
+      countryOfOrigin: form.countryOfOrigin.trim(),
       defaultValue: parseFloat(form.defaultValue) || undefined,
-      defaultQuantity: parseInt(form.defaultQuantity) || 1,
+      defaultQuantity: parseInt(form.defaultQuantity, 10) || 1,
       requiresSignature: form.requiresSignature,
       requiresInsurance: form.requiresInsurance,
     };
     try {
       if (editId) {
         await updateSku.mutateAsync({ id: editId, data: payload });
+        Haptics.success();
+        toast.success('SKU updated');
       } else {
         await createSku.mutateAsync(payload);
+        Haptics.success();
+        toast.success('SKU created');
       }
       setModal(false);
-    } catch {}
-  }, [form, editId, createSku, updateSku]);
+    } catch (e: any) {
+      Haptics.error();
+      toast.error(e?.message || 'Could not save SKU');
+    }
+  }, [form, editId, createSku, updateSku, validate]);
 
   const doDelete = useCallback((id: string, name: string) => {
     Alert.alert('Delete SKU', `Delete "${name}"?`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteSku.mutate(id) },
+      { text: 'Delete', style: 'destructive', onPress: () => { deleteSku.mutate(id); toast.success('SKU deleted'); } },
     ]);
   }, [deleteSku]);
 
   const busy = createSku.isPending || updateSku.isPending || deleteSku.isPending;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={22} color={colors.ink} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>SKU Manager</Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={openCreate}>
-          <Ionicons name="add" size={22} color={colors.ink} />
-        </TouchableOpacity>
-      </View>
+    <AnimatedScreen direction="fade-up">
+      <View style={styles.container}>
+        <Animated.View entering={FadeInDown.duration(380)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <PressableScale style={styles.headerBtn} onPress={() => router.back()} haptic="light">
+            <Ionicons name="chevron-back" size={22} color={colors.ink} />
+          </PressableScale>
+          <Text style={styles.headerTitle}>SKU Manager</Text>
+          <PressableScale style={styles.headerBtn} onPress={openCreate} haptic="light">
+            <Ionicons name="add" size={22} color={colors.ink} />
+          </PressableScale>
+        </Animated.View>
 
-      <View style={styles.searchRow}>
-        <Ionicons name="search" size={18} color={colors.faint} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search SKUs or products…"
-          placeholderTextColor={colors.faint}
-          value={search}
-          onChangeText={setSearch}
-        />
-      </View>
+        <Animated.View entering={FadeInDown.duration(380).delay(40)}>
+          <View style={styles.searchRow}>
+            <Ionicons name="search" size={18} color={colors.faint} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search SKUs or products…"
+              placeholderTextColor={colors.faint}
+              value={search}
+              onChangeText={setSearch}
+            />
+          </View>
+        </Animated.View>
 
-      {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={colors.accent} />
-        </View>
-      ) : filtered.length === 0 ? (
-        <View style={styles.center}>
-          <Ionicons name="pricetags-outline" size={64} color={colors.accentSoft} />
-          <Text style={styles.emptyText}>
-            {search ? 'No matching SKUs' : 'No SKUs yet'}
-          </Text>
-          <Text style={styles.emptySub}>
-            {search ? 'Try a different search' : 'Create your first product preset'}
-          </Text>
-          {!search && (
-            <TouchableOpacity style={styles.emptyBtn} onPress={openCreate}>
-              <Ionicons name="add" size={18} color={colors.white} />
-              <Text style={styles.emptyBtnText}>Create SKU</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ) : (
-        <ScrollView style={styles.list} contentContainerStyle={styles.listInner}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-          showsVerticalScrollIndicator={false}
-        >
-          {filtered.map((s) => (
-            <TouchableOpacity key={s._id} style={styles.card} onPress={() => openEdit(s)} activeOpacity={0.7}>
-              <View style={styles.cardTop}>
-                <View style={styles.skuBadge}>
-                  <Text style={styles.skuBadgeText}>{s.sku}</Text>
-                </View>
-                <TouchableOpacity style={styles.deleteBtn} onPress={() => doDelete(s._id, s.name)} hitSlop={8}>
-                  <Ionicons name="trash-outline" size={16} color={colors.red} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.cardName}>{s.name}</Text>
-              {s.description ? <Text style={styles.cardDesc} numberOfLines={2}>{s.description}</Text> : null}
-              <View style={styles.metaGrid}>
-                {s.hsCode ? (
-                  <View style={styles.metaItem}>
-                    <Ionicons name="barcode-outline" size={14} color={colors.faint} />
-                    <Text style={styles.metaText}>HS {s.hsCode}</Text>
+        {isLoading ? (
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color={colors.accent} />
+          </View>
+        ) : filtered.length === 0 ? (
+          <Animated.View entering={FadeInDown.duration(420)} style={styles.center}>
+            <Ionicons name="pricetags-outline" size={64} color={colors.accentSoft} />
+            <Text style={styles.emptyText}>
+              {search ? 'No matching SKUs' : 'No SKUs yet'}
+            </Text>
+            <Text style={styles.emptySub}>
+              {search ? 'Try a different search' : 'Create your first product preset'}
+            </Text>
+            {!search && (
+              <PressableScale style={styles.emptyBtn} onPress={openCreate} haptic="light">
+                <Ionicons name="add" size={18} color={colors.white} />
+                <Text style={styles.emptyBtnText}>Create SKU</Text>
+              </PressableScale>
+            )}
+          </Animated.View>
+        ) : (
+          <ScrollView style={styles.list} contentContainerStyle={styles.listInner}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+            showsVerticalScrollIndicator={false}
+          >
+            {filtered.map((s, i) => (
+              <Animated.View
+                key={s._id}
+                entering={FadeInDown.duration(360).delay(Math.min(i, 10) * 60)}
+              >
+                <PressableCard style={styles.card} onPress={() => openEdit(s)} haptic="light">
+                  <View style={styles.cardTop}>
+                    <View style={styles.skuBadge}>
+                      <Text style={styles.skuBadgeText}>{s.sku}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.deleteBtn}
+                      onPress={() => doDelete(s._id, s.name)}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="trash-outline" size={16} color={colors.red} />
+                    </TouchableOpacity>
                   </View>
-                ) : null}
-                {s.countryOfOrigin ? (
-                  <View style={styles.metaItem}>
-                    <Ionicons name="globe-outline" size={14} color={colors.faint} />
-                    <Text style={styles.metaText}>{s.countryOfOrigin}</Text>
+                  <Text style={styles.cardName}>{s.name}</Text>
+                  {s.description ? <Text style={styles.cardDesc} numberOfLines={2}>{s.description}</Text> : null}
+                  <View style={styles.metaGrid}>
+                    {s.hsCode ? (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="barcode-outline" size={14} color={colors.faint} />
+                        <Text style={styles.metaText}>HS {s.hsCode}</Text>
+                      </View>
+                    ) : null}
+                    {s.countryOfOrigin ? (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="globe-outline" size={14} color={colors.faint} />
+                        <Text style={styles.metaText}>{s.countryOfOrigin}</Text>
+                      </View>
+                    ) : null}
+                    {s.defaultValue ? (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="cash-outline" size={14} color={colors.faint} />
+                        <Text style={styles.metaText}>${s.defaultValue}</Text>
+                      </View>
+                    ) : null}
+                    {s.defaultQuantity ? (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="layers-outline" size={14} color={colors.faint} />
+                        <Text style={styles.metaText}>Qty {s.defaultQuantity}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                ) : null}
-                {s.defaultValue ? (
-                  <View style={styles.metaItem}>
-                    <Ionicons name="cash-outline" size={14} color={colors.faint} />
-                    <Text style={styles.metaText}>${s.defaultValue}</Text>
+                  <View style={styles.cardToggles}>
+                    {s.requiresSignature && (
+                      <View style={styles.toggleBadge}>
+                        <Ionicons name="create-outline" size={12} color={colors.accent} />
+                        <Text style={styles.toggleBadgeText}>Signature</Text>
+                      </View>
+                    )}
+                    {s.requiresInsurance && (
+                      <View style={styles.toggleBadge}>
+                        <Ionicons name="shield-checkmark-outline" size={12} color={colors.accent} />
+                        <Text style={styles.toggleBadgeText}>Insurance</Text>
+                      </View>
+                    )}
                   </View>
-                ) : null}
-                {s.defaultQuantity ? (
-                  <View style={styles.metaItem}>
-                    <Ionicons name="layers-outline" size={14} color={colors.faint} />
-                    <Text style={styles.metaText}>Qty {s.defaultQuantity}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <View style={styles.cardToggles}>
-                {s.requiresSignature && (
-                  <View style={styles.toggleBadge}>
-                    <Ionicons name="create-outline" size={12} color={colors.accent} />
-                    <Text style={styles.toggleBadgeText}>Signature</Text>
-                  </View>
-                )}
-                {s.requiresInsurance && (
-                  <View style={styles.toggleBadge}>
-                    <Ionicons name="shield-checkmark-outline" size={12} color={colors.accent} />
-                    <Text style={styles.toggleBadgeText}>Insurance</Text>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+                </PressableCard>
+              </Animated.View>
+            ))}
+          </ScrollView>
+        )}
 
-      <Modal visible={modal} animationType="slide" transparent onRequestClose={() => setModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <View style={styles.grabHandle} />
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editId ? 'Edit SKU' : 'New SKU'}</Text>
-              <TouchableOpacity onPress={() => setModal(false)} hitSlop={8}>
-                <Ionicons name="close" size={24} color={colors.ink} />
-              </TouchableOpacity>
-            </View>
+        <Sheet visible={modal} onClose={() => setModal(false)}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{editId ? 'Edit SKU' : 'New SKU'}</Text>
+            <PressableScale onPress={() => setModal(false)} hitSlop={8} haptic="light">
+              <Ionicons name="close" size={24} color={colors.ink} />
+            </PressableScale>
+          </View>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyInner} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={styles.label}>SKU code</Text>
-              <TextInput style={styles.input} value={form.sku} onChangeText={(t) => setForm((f) => ({ ...f, sku: t.toUpperCase() }))} placeholder="e.g. TSHIRT-BLK-M" placeholderTextColor={colors.faint} autoCapitalize="characters" editable={!editId} />
-
-              <Text style={styles.label}>Name</Text>
-              <TextInput style={styles.input} value={form.name} onChangeText={(t) => setForm((f) => ({ ...f, name: t }))} placeholder="Product name" placeholderTextColor={colors.faint} />
-
-              <Text style={styles.label}>Description</Text>
-              <TextInput style={[styles.input, styles.inputMulti]} value={form.description} onChangeText={(t) => setForm((f) => ({ ...f, description: t }))} placeholder="Optional description" placeholderTextColor={colors.faint} multiline textAlignVertical="top" />
-
-              <Text style={styles.label}>HS Code</Text>
-              <TextInput style={styles.input} value={form.hsCode} onChangeText={(t) => setForm((f) => ({ ...f, hsCode: t }))} placeholder="e.g. 6109.10.00" placeholderTextColor={colors.faint} />
-
-              <Text style={styles.label}>Country of origin</Text>
-              <TextInput style={styles.input} value={form.countryOfOrigin} onChangeText={(t) => setForm((f) => ({ ...f, countryOfOrigin: t }))} placeholder="e.g. Canada" placeholderTextColor={colors.faint} />
+              <FormField
+                ref={skuRef}
+                label="SKU code"
+                value={form.sku}
+                onChangeText={(t) => onFieldChange('sku', t)}
+                onBlur={() => onFieldBlur('sku')}
+                placeholder="e.g. TSHIRT-BLK-M"
+                error={touched.sku ? errors.sku : null}
+                required
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!editId}
+                returnKeyType="next"
+                onSubmitEditing={() => nameRef.current?.focus()}
+              />
+              <FormField
+                ref={nameRef}
+                label="Name"
+                value={form.name}
+                onChangeText={(t) => onFieldChange('name', t)}
+                onBlur={() => onFieldBlur('name')}
+                placeholder="Product name"
+                error={touched.name ? errors.name : null}
+                required
+                autoCapitalize="sentences"
+                returnKeyType="next"
+                onSubmitEditing={() => descRef.current?.focus()}
+              />
+              <FormField
+                ref={descRef}
+                label="Description"
+                value={form.description}
+                onChangeText={(t) => onFieldChange('description', t)}
+                onBlur={() => onFieldBlur('description')}
+                placeholder="Optional description"
+                multiline
+              />
+              <FormField
+                ref={hsRef}
+                label="HS code"
+                value={form.hsCode}
+                onChangeText={(t) => onFieldChange('hsCode', t)}
+                onBlur={() => onFieldBlur('hsCode')}
+                placeholder="e.g. 6109.10.00"
+                error={touched.hsCode ? errors.hsCode : null}
+                hint={!touched.hsCode || !errors.hsCode ? '6–10 digits, dots optional' : undefined}
+                keyboardType="number-pad"
+                returnKeyType="next"
+                onSubmitEditing={() => countryRef.current?.focus()}
+              />
+              <FormField
+                ref={countryRef}
+                label="Country of origin"
+                value={form.countryOfOrigin}
+                onChangeText={(t) => onFieldChange('countryOfOrigin', t)}
+                onBlur={() => onFieldBlur('countryOfOrigin')}
+                placeholder="e.g. Canada"
+                autoComplete="country"
+                textContentType="countryName"
+                returnKeyType="next"
+                onSubmitEditing={() => valueRef.current?.focus()}
+              />
 
               <View style={styles.row}>
                 <View style={styles.halfField}>
-                  <Text style={styles.label}>Default value</Text>
-                  <TextInput style={styles.input} value={form.defaultValue} onChangeText={(t) => setForm((f) => ({ ...f, defaultValue: t }))} placeholder="$0.00" placeholderTextColor={colors.faint} keyboardType="decimal-pad" />
+                  <FormField
+                    ref={valueRef}
+                    label="Default value"
+                    value={form.defaultValue}
+                    onChangeText={(t) => onFieldChange('defaultValue', t)}
+                    onBlur={() => onFieldBlur('defaultValue')}
+                    placeholder="0.00"
+                    error={touched.defaultValue ? errors.defaultValue : null}
+                    keyboardType="decimal-pad"
+                    returnKeyType="next"
+                    onSubmitEditing={() => qtyRef.current?.focus()}
+                  />
                 </View>
                 <View style={styles.halfField}>
-                  <Text style={styles.label}>Default quantity</Text>
-                  <TextInput style={styles.input} value={form.defaultQuantity} onChangeText={(t) => setForm((f) => ({ ...f, defaultQuantity: t }))} placeholder="1" placeholderTextColor={colors.faint} keyboardType="number-pad" />
+                  <FormField
+                    ref={qtyRef}
+                    label="Default quantity"
+                    value={form.defaultQuantity}
+                    onChangeText={(t) => onFieldChange('defaultQuantity', t)}
+                    onBlur={() => onFieldBlur('defaultQuantity')}
+                    placeholder="1"
+                    error={touched.defaultQuantity ? errors.defaultQuantity : null}
+                    keyboardType="number-pad"
+                    returnKeyType="done"
+                    onSubmitEditing={save}
+                  />
                 </View>
               </View>
 
               <View style={styles.toggleGroup}>
-                <TouchableOpacity style={styles.toggleRow} onPress={() => setForm((f) => ({ ...f, requiresSignature: !f.requiresSignature }))}>
+                <PressableScale
+                  style={styles.toggleRow}
+                  onPress={() => {
+                    Haptics.light();
+                    setForm((f) => ({ ...f, requiresSignature: !f.requiresSignature }));
+                  }}
+                  haptic="light"
+                >
                   <View style={styles.toggleLabelGroup}>
                     <Ionicons name="create-outline" size={18} color={colors.muted} />
                     <Text style={styles.toggleLabel}>Requires signature</Text>
                   </View>
                   <View style={[styles.toggle, form.requiresSignature && styles.toggleOn]}>
-                    <View style={[styles.toggleDot, form.requiresSignature && styles.toggleDotOn]} />
+                    <Animated.View
+                      style={[styles.toggleDot, form.requiresSignature && styles.toggleDotOn]}
+                    />
                   </View>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.toggleRow} onPress={() => setForm((f) => ({ ...f, requiresInsurance: !f.requiresInsurance }))}>
+                </PressableScale>
+                <PressableScale
+                  style={styles.toggleRow}
+                  onPress={() => {
+                    Haptics.light();
+                    setForm((f) => ({ ...f, requiresInsurance: !f.requiresInsurance }));
+                  }}
+                  haptic="light"
+                >
                   <View style={styles.toggleLabelGroup}>
                     <Ionicons name="shield-checkmark-outline" size={18} color={colors.muted} />
                     <Text style={styles.toggleLabel}>Requires insurance</Text>
                   </View>
                   <View style={[styles.toggle, form.requiresInsurance && styles.toggleOn]}>
-                    <View style={[styles.toggleDot, form.requiresInsurance && styles.toggleDotOn]} />
+                    <Animated.View
+                      style={[styles.toggleDot, form.requiresInsurance && styles.toggleDotOn]}
+                    />
                   </View>
-                </TouchableOpacity>
+                </PressableScale>
               </View>
             </ScrollView>
-            <View style={styles.modalFooter}>
-              <TouchableOpacity style={styles.modalBtn} onPress={save} disabled={busy || !form.sku || !form.name}>
-                {busy ? <ActivityIndicator size="small" color={colors.white} /> : <Text style={styles.modalBtnText}>{editId ? 'Update SKU' : 'Create SKU'}</Text>}
-              </TouchableOpacity>
-            </View>
+          </KeyboardAvoidingView>
+          <View style={styles.modalFooter}>
+            <PressableScale
+              style={[styles.modalBtn, busy && styles.modalBtnDisabled]}
+              onPress={save}
+              disabled={busy}
+              haptic="success"
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Text style={styles.modalBtnText}>{editId ? 'Update SKU' : 'Create SKU'}</Text>
+              )}
+            </PressableScale>
           </View>
-        </View>
-      </Modal>
-    </View>
+        </Sheet>
+      </View>
+    </AnimatedScreen>
   );
 }
 
@@ -266,7 +499,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg, paddingTop: 60, paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm,
   },
   headerBtn: {
     width: 40, height: 40, borderRadius: borderRadius.full,
@@ -336,15 +569,6 @@ const styles = StyleSheet.create({
   },
   emptyBtnText: { color: colors.white, fontSize: 15, fontWeight: '600' },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  modal: {
-    backgroundColor: colors.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    maxHeight: '90%',
-  },
-  grabHandle: {
-    width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(60,60,67,0.18)',
-    alignSelf: 'center', marginTop: spacing.sm,
-  },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing.xl, paddingVertical: spacing.lg,
@@ -352,14 +576,6 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '700', color: colors.ink },
   modalBody: {},
   modalBodyInner: { paddingHorizontal: spacing.xl, gap: spacing.md, paddingBottom: 40 },
-  label: { fontSize: 13, fontWeight: '600', color: colors.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
-  input: {
-    backgroundColor: colors.surface, borderRadius: borderRadius.sm,
-    paddingHorizontal: spacing.lg, height: 50,
-    fontSize: 15, color: colors.ink,
-    borderWidth: 1, borderColor: colors.hairline,
-  },
-  inputMulti: { minHeight: 80, paddingTop: spacing.md },
   row: { flexDirection: 'row', gap: spacing.sm },
   halfField: { flex: 1 },
 
@@ -391,5 +607,6 @@ const styles = StyleSheet.create({
     height: 52, borderRadius: borderRadius.sm, backgroundColor: colors.accent,
     alignItems: 'center', justifyContent: 'center',
   },
+  modalBtnDisabled: { opacity: 0.6 },
   modalBtnText: { color: colors.white, fontSize: 16, fontWeight: '600' },
 });

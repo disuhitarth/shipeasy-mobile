@@ -1,4 +1,5 @@
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, type ViewStyle } from 'react-native';
+import { Text, ActivityIndicator, type ViewStyle } from 'react-native';
+import { PressableScale } from '@/components/PressableScale';
 import { colors, borderRadius, spacing } from '@/lib/theme';
 
 interface ButtonProps {
@@ -10,36 +11,39 @@ interface ButtonProps {
   disabled?: boolean;
   loading?: boolean;
   style?: ViewStyle;
+  haptic?: 'none' | 'light' | 'medium' | 'success' | 'warning' | 'error' | 'selection';
 }
 
 function fw(w: string): any { return w; }
 
 export function Button({
-  children, onPress, variant = 'primary', full, disabled, loading, style,
+  children, onPress, variant = 'primary', full, disabled, loading, style, haptic,
 }: ButtonProps) {
   return (
-    <TouchableOpacity
-      style={[styles.base, styles[variant], full && styles.full, disabled && styles.disabled, style]}
+    <PressableScale
       onPress={onPress}
       disabled={disabled || loading}
-      activeOpacity={0.85}
+      haptic={haptic ?? (variant === 'primary' || variant === 'dark' ? 'light' : 'light')}
+      scaleTo={0.96}
+      duration={70}
+      style={[styles.base, styles[variant], full && styles.full, disabled && styles.disabled, style]}
     >
       {loading ? (
         <ActivityIndicator color={variant === 'primary' || variant === 'dark' ? '#fff' : colors.ink} />
       ) : (
         <Text style={[styles.text, styles[`text_${variant}`]]}>{children}</Text>
       )}
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = {
   base: {
     height: 52,
     borderRadius: borderRadius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    flexDirection: 'row' as const,
     gap: 9,
     paddingHorizontal: 20,
     letterSpacing: -0.2,
@@ -62,11 +66,11 @@ const styles = StyleSheet.create({
   },
   ghost: { backgroundColor: colors.surface2 },
   dark: { backgroundColor: colors.ink },
-  full: { width: '100%' },
+  full: { width: '100%' as const },
   disabled: { opacity: 0.42 },
   text: { fontSize: 16, fontWeight: fw('640'), letterSpacing: -0.2 },
   text_primary: { color: colors.white },
   text_secondary: { color: colors.ink },
   text_ghost: { color: colors.ink },
   text_dark: { color: colors.white },
-});
+};

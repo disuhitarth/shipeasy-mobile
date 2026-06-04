@@ -1,8 +1,12 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSKUs } from '@/lib/queries';
 import type { SKU } from '@/types';
-import { useState } from 'react';
+import { Sheet } from '@/components/Sheet';
+import { PressableScale } from '@/components/PressableScale';
+import { colors, borderRadius } from '@/lib/theme';
+import * as Haptics from '@/lib/haptics';
 
 interface SkuSheetProps {
   open: boolean;
@@ -12,99 +16,91 @@ interface SkuSheetProps {
 
 export function SkuSheet({ open, onClose, onPick }: SkuSheetProps) {
   const { data: skus } = useSKUs();
-  if (!open) return null;
 
   return (
-    <Modal transparent animationType="slide" visible={open} onRequestClose={onClose}>
-      <TouchableOpacity style={styles.scrim} activeOpacity={1} onPress={onClose}>
-        <TouchableOpacity
-          style={styles.sheet}
-          activeOpacity={1}
-          onPress={() => {}}
-        >
-          <View style={styles.grab} />
-          <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Quick add SKU</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={16} color="#6B6B76" />
-            </TouchableOpacity>
-          </View>
+    <Sheet visible={open} onClose={onClose} maxHeight="80%">
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sheetTitle}>Quick add SKU</Text>
           <Text style={styles.sheetSub}>
             Auto-fills weight, dimensions & customs.
           </Text>
-          <ScrollView style={styles.skuList}>
-            {(!skus || skus.length === 0) ? (
-              <Text style={styles.empty}>No SKUs saved yet</Text>
-            ) : (
-              skus.filter(s => s.isActive).map((sku) => (
-                <TouchableOpacity
-                  key={sku._id}
-                  style={styles.skuRow}
-                  onPress={() => { onPick(sku); onClose(); }}
-                >
-                  <View style={styles.skuAvatar}>
-                    <Text style={styles.skuEmoji}>
-                      {sku.name.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.skuInfo}>
-                    <Text style={styles.skuName}>{sku.name}</Text>
-                    <Text style={styles.skuMeta}>
-                      {sku.sku} · {sku.defaultValue ? `$${sku.defaultValue}` : ''}
-                    </Text>
-                  </View>
-                  <Text style={styles.skuValue}>
-                    ${sku.defaultValue?.toFixed(2) || '—'}
+        </View>
+        <PressableScale style={styles.closeBtn} onPress={onClose} haptic="light">
+          <Ionicons name="close" size={16} color={colors.muted} />
+        </PressableScale>
+      </View>
+      <ScrollView
+        style={styles.skuList}
+        contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {(!skus || skus.length === 0) ? (
+          <Text style={styles.empty}>No SKUs saved yet</Text>
+        ) : (
+          skus.filter(s => s.isActive).map((sku, i) => (
+            <Animated.View
+              key={sku._id}
+              entering={FadeInDown.duration(320).delay(i * 50)}
+            >
+              <PressableScale
+                style={styles.skuRow}
+                onPress={() => {
+                  Haptics.light();
+                  onPick(sku);
+                  onClose();
+                }}
+                haptic="light"
+              >
+                <View style={styles.skuAvatar}>
+                  <Text style={styles.skuEmoji}>
+                    {sku.name.charAt(0).toUpperCase()}
                   </Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </ScrollView>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
+                </View>
+                <View style={styles.skuInfo}>
+                  <Text style={styles.skuName}>{sku.name}</Text>
+                  <Text style={styles.skuMeta}>
+                    {sku.sku} · {sku.defaultValue ? `$${sku.defaultValue}` : ''}
+                  </Text>
+                </View>
+                <Text style={styles.skuValue}>
+                  ${sku.defaultValue?.toFixed(2) || '—'}
+                </Text>
+              </PressableScale>
+            </Animated.View>
+          ))
+        )}
+      </ScrollView>
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
-  scrim: {
-    flex: 1,
-    backgroundColor: 'rgba(8,8,16,0.42)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: '#F2F2F5',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 12,
-    paddingBottom: 40,
-    maxHeight: '80%',
-  },
-  grab: {
-    width: 38,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(10,10,20,0.15)',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  sheetHeader: {
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
+    alignItems: 'flex-start',
     paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 8,
   },
-  sheetTitle: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4 },
-  sheetSub: { fontSize: 13.5, color: '#6B6B76', marginBottom: 14, paddingHorizontal: 8 },
-  skuList: { gap: 10 },
-  empty: { color: '#9A9AA4', fontSize: 14, textAlign: 'center', paddingVertical: 40 },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetTitle: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4, color: colors.ink },
+  sheetSub: { fontSize: 13.5, color: colors.muted, marginTop: 2 },
+  skuList: { flex: 1 },
+  empty: { color: colors.faint, fontSize: 14, textAlign: 'center', paddingVertical: 40 },
   skuRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 13,
     padding: 13,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     marginBottom: 10,
   },
@@ -112,13 +108,13 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 13,
-    backgroundColor: '#ECEBFF',
+    backgroundColor: colors.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  skuEmoji: { fontSize: 20, color: '#635BFF', fontWeight: '700' },
+  skuEmoji: { fontSize: 20, color: colors.accent, fontWeight: '700' },
   skuInfo: { flex: 1 },
-  skuName: { fontSize: 15, fontWeight: '600' },
-  skuMeta: { fontSize: 12.5, color: '#9A9AA4', marginTop: 2 },
-  skuValue: { fontSize: 14, fontWeight: '700', color: '#0B0B12' },
+  skuName: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  skuMeta: { fontSize: 12.5, color: colors.faint, marginTop: 2 },
+  skuValue: { fontSize: 14, fontWeight: '700', color: colors.ink },
 });

@@ -3,6 +3,13 @@ import * as SecureStore from 'expo-secure-store';
 
 const API_BASE = 'https://shipeasyplus.netlify.app/api';
 
+type UnauthorizedHandler = () => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  onUnauthorized = handler;
+}
+
 const api = axios.create({
   baseURL: API_BASE,
   timeout: 15000,
@@ -25,8 +32,14 @@ api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<{ error: string }>) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid — could trigger logout
       SecureStore.deleteItemAsync('auth_token').catch(() => {});
+      if (onUnauthorized) {
+        try {
+          onUnauthorized();
+        } catch {
+          // ignore handler errors
+        }
+      }
     }
     const message = error.response?.data?.error || error.message || 'Something went wrong';
     return Promise.reject(new ApiError(message, error.response?.status));

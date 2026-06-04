@@ -1,15 +1,22 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, Animated, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useState, useRef, useEffect } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AnimatedRN, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { useShipment, useTracking, useVoidShipment } from '@/lib/queries';
 import api from '@/lib/api';
+import { bytesToBase64 } from '@/lib/base64';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
+import { StaggeredItem } from '@/components/Staggered';
+import { AnimatedScreen } from '@/components/AnimatedScreen';
+import { PressableCard, PressableScale } from '@/components/PressableScale';
 import { colors, spacing, borderRadius, shadows } from '@/lib/theme';
 import type { TrackingEvent } from '@/types';
+import * as Haptics from '@/lib/haptics';
 
 const CAN_VOID = ['label-created', 'pending'];
 
@@ -38,18 +45,19 @@ export default function ShipmentDetailScreen() {
   const { data: tracking, isLoading: trackLoading } = useTracking(id);
   const voidShipment = useVoidShipment();
   const [sharing, setSharing] = useState(false);
+  const insets = useSafeAreaInsets();
 
   const events: TrackingEvent[] = tracking?.events ?? tracking ?? [];
   const isDelivered = shipment?.status === 'delivered';
   const isInTransit = !isDelivered && !['voided', 'failed', 'pending'].includes(shipment?.status || '');
 
   const openLabel = async () => {
+    Haptics.light();
     setSharing(true);
     try {
       const res = await api.get(`/shipments/${id}/label`, { responseType: 'arraybuffer' });
-      const base64 = btoa(
-        new Uint8Array(res.data).reduce((data, byte) => data + String.fromCharCode(byte), ''),
-      );
+      const bytes = res.data instanceof Uint8Array ? res.data : new Uint8Array(res.data);
+      const base64 = bytesToBase64(bytes);
       const uri = FileSystem.documentDirectory + `label-${id}.pdf`;
       await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
       if (await Sharing.isAvailableAsync()) {
@@ -65,6 +73,7 @@ export default function ShipmentDetailScreen() {
   };
 
   const voidLabel = () => {
+    Haptics.warning();
     Alert.alert(
       'Void label',
       'Are you sure? This will refund the label cost to your wallet.',
@@ -75,6 +84,7 @@ export default function ShipmentDetailScreen() {
           onPress: async () => {
             try {
               await voidShipment.mutateAsync(id);
+              Haptics.success();
               Alert.alert('Voided', 'Label has been voided and refunded.');
               router.back();
             } catch {}
@@ -99,207 +109,229 @@ export default function ShipmentDetailScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={20} color={colors.ink} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Shipment</Text>
-        <View style={{ width: 40 }} />
-      </View>
+    <AnimatedScreen direction="fade-up">
+      <View style={styles.container}>
+        <AnimatedRN.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <PressableScale style={styles.backBtn} onPress={() => router.back()} haptic="light">
+            <Ionicons name="chevron-back" size={20} color={colors.ink} />
+          </PressableScale>
+          <Text style={styles.headerTitle}>Shipment</Text>
+          <View style={{ width: 40 }} />
+        </AnimatedRN.View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInner}>
-        {isLoading ? (
-          <View style={styles.loadingWrap}>
-            <SkeletonCard />
-            <SkeletonCard />
-            <SkeletonCard />
-          </View>
-        ) : isError ? (
-          <View style={styles.errorWrap}>
-            <Ionicons name="cloud-offline-outline" size={48} color={colors.faint} />
-            <Text style={styles.errorText}>Could not load shipment</Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        ) : !shipment ? (
-          <View style={styles.errorWrap}>
-            <Ionicons name="document-outline" size={48} color={colors.faint} />
-            <Text style={styles.errorText}>Shipment not found</Text>
-          </View>
-        ) : (
-          <>
-            <View style={styles.heroCard}>
-              <View style={styles.route}>
-                <View style={styles.routeEnd}>
-                  <Text style={styles.routeLbl}>FROM</Text>
-                  <Text style={styles.routeCity}>Toronto</Text>
-                  <Text style={styles.routeProvince}>ON</Text>
-                </View>
-                <View style={styles.routeLineWrap}>
-                  <View style={styles.routeLine} />
-                  <View style={styles.routeTruck}>
-                    <Ionicons name="car" size={13} color={colors.white} />
-                  </View>
-                </View>
-                <View style={[styles.routeEnd, { alignItems: 'flex-end' }]}>
-                  <Text style={styles.routeLbl}>TO</Text>
-                  <Text style={styles.routeCity}>{shipment.recipientCity}</Text>
-                  <Text style={styles.routeProvince}>{shipment.recipientProvinceCode}</Text>
-                </View>
-              </View>
-
-              <View style={styles.statusRow}>
-                <Badge status={shipment.status} />
-                {shipment.service && (
-                  <Text style={styles.serviceLabel}>{shipment.service}</Text>
-                )}
-              </View>
-
-              {shipment.trackingCode && (
-                <View style={styles.trackRow}>
-                  <Ionicons name="barcode-outline" size={14} color={colors.faint} />
-                  <Text style={styles.trackValue}>{shipment.trackingCode}</Text>
-                </View>
-              )}
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInner} showsVerticalScrollIndicator={false}>
+          {isLoading ? (
+            <View style={styles.loadingWrap}>
+              <SkeletonCard />
+              <SkeletonCard />
+              <SkeletonCard />
             </View>
-
-            <View style={styles.etaBanner}>
-              <Ionicons name="calendar-outline" size={18} color={colors.accent} />
-              <View>
-                <Text style={styles.etaTitle}>Estimated delivery</Text>
-                <Text style={styles.etaSub}>{formatEstDelivery()}</Text>
-              </View>
-            </View>
-
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Shipment Details</Text>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Recipient</Text>
-                <Text style={styles.detailValue}>{shipment.recipientName}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Address</Text>
-                <Text style={styles.detailValue} numberOfLines={2}>
-                  {shipment.recipientAddress1}, {shipment.recipientCity},{' '}
-                  {shipment.recipientProvinceCode} {shipment.recipientPostalCode}
-                </Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Package</Text>
-                <Text style={styles.detailValue}>{shipment.packageType}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Weight</Text>
-                <Text style={styles.detailValue}>{shipment.weight}{shipment.weightUnit}</Text>
-              </View>
-              {(shipment.length || shipment.width || shipment.height) && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Dimensions</Text>
-                  <Text style={styles.detailValue}>
-                    {[shipment.length, shipment.width, shipment.height].filter(Boolean).join(' \u00D7 ')}
-                    {shipment.sizeUnit ? ` ${shipment.sizeUnit}` : ''}
-                  </Text>
-                </View>
-              )}
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Service</Text>
-                <Text style={styles.detailValue}>{shipment.service || shipment.postageType || '\u2014'}</Text>
-              </View>
-              {shipment.insured && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Insurance</Text>
-                  <Text style={styles.detailValue}>Included</Text>
-                </View>
-              )}
-              {shipment.signatureConfirmation && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Signature</Text>
-                  <Text style={styles.detailValue}>Required</Text>
-                </View>
-              )}
-              <View style={[styles.detailRow, styles.detailRowLast]}>
-                <Text style={styles.detailLabel}>Total charged</Text>
-                <Text style={styles.detailTotal}>${shipment.customerTotal?.toFixed(2)}</Text>
-              </View>
-            </View>
-
-            {events.length > 0 && (
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Tracking</Text>
-                <View style={styles.timeline}>
-                  {events.map((ev, i) => {
-                    const isLatest = i === 0;
-                    const isLast = i === events.length - 1;
-                    return (
-                      <View key={i} style={styles.tlRow}>
-                        <View style={styles.tlRail}>
-                          <View style={[styles.tlNode, isLatest && styles.tlNodeActive]} />
-                          {!isLast && <View style={[styles.tlLine, isLatest && styles.tlLineActive]} />}
-                        </View>
-                        <View style={styles.tlBody}>
-                          <Text style={[styles.tlDesc, !isLatest && styles.tlInactive]}>
-                            {ev.description || ev.status}
-                          </Text>
-                          <View style={styles.tlMeta}>
-                            {ev.location && (
-                              <View style={styles.tlLoc}>
-                                <Ionicons name="location-outline" size={11} color={colors.faint} />
-                                <Text style={styles.tlSub}>{ev.location}</Text>
-                              </View>
-                            )}
-                            {ev.date && <Text style={styles.tlSub}>{formatDate(ev.date)}</Text>}
-                          </View>
-                          {isLatest && isInTransit && <PulseTag />}
+          ) : isError ? (
+            <AnimatedRN.View entering={FadeInDown.duration(420)} style={styles.errorWrap}>
+              <Ionicons name="cloud-offline-outline" size={48} color={colors.faint} />
+              <Text style={styles.errorText}>Could not load shipment</Text>
+              <PressableScale style={styles.retryBtn} onPress={() => refetch()} haptic="light">
+                <Text style={styles.retryText}>Retry</Text>
+              </PressableScale>
+            </AnimatedRN.View>
+          ) : !shipment ? (
+            <AnimatedRN.View entering={FadeInDown.duration(420)} style={styles.errorWrap}>
+              <Ionicons name="document-outline" size={48} color={colors.faint} />
+              <Text style={styles.errorText}>Shipment not found</Text>
+            </AnimatedRN.View>
+          ) : (
+            <>
+              <AnimatedRN.View entering={FadeInDown.duration(420).delay(40)}>
+                <StaggeredItem index={0} duration={360}>
+                  <View style={styles.heroCard}>
+                    <View style={styles.route}>
+                      <View style={styles.routeEnd}>
+                        <Text style={styles.routeLbl}>FROM</Text>
+                        <Text style={styles.routeCity}>Toronto</Text>
+                        <Text style={styles.routeProvince}>ON</Text>
+                      </View>
+                      <View style={styles.routeLineWrap}>
+                        <View style={styles.routeLine} />
+                        <View style={styles.routeTruck}>
+                          <Ionicons name="car" size={13} color={colors.white} />
                         </View>
                       </View>
-                    );
-                  })}
-                </View>
-              </View>
-            )}
+                      <View style={[styles.routeEnd, { alignItems: 'flex-end' }]}>
+                        <Text style={styles.routeLbl}>TO</Text>
+                        <Text style={styles.routeCity}>{shipment.recipientCity}</Text>
+                        <Text style={styles.routeProvince}>{shipment.recipientProvinceCode}</Text>
+                      </View>
+                    </View>
 
-            <TouchableOpacity style={styles.labelRow} onPress={openLabel} disabled={sharing}>
-              <View style={styles.labelIcon}>
-                <Ionicons name="document-text" size={22} color={colors.accent} />
-              </View>
-              <View style={styles.labelInfo}>
-                <Text style={styles.labelTitle}>Shipping Label</Text>
-                <Text style={styles.labelSub}>PDF \u00B7 {shipment.labelFormat || '4\u00D76'}</Text>
-              </View>
-              {sharing ? (
-                <ActivityIndicator size="small" color={colors.accent} />
-              ) : (
-                <View style={styles.labelCta}>
-                  <Text style={styles.labelCtaText}>View</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+                    <View style={styles.statusRow}>
+                      <Badge status={shipment.status} />
+                      {shipment.service && (
+                        <Text style={styles.serviceLabel}>{shipment.service}</Text>
+                      )}
+                    </View>
+
+                    {shipment.trackingCode && (
+                      <View style={styles.trackRow}>
+                        <Ionicons name="barcode-outline" size={14} color={colors.faint} />
+                        <Text style={styles.trackValue}>{shipment.trackingCode}</Text>
+                      </View>
+                    )}
+                  </View>
+                </StaggeredItem>
+              </AnimatedRN.View>
+
+              <AnimatedRN.View entering={FadeInDown.duration(420).delay(80)}>
+                <View style={styles.etaBanner}>
+                  <Ionicons name="calendar-outline" size={18} color={colors.accent} />
+                  <View>
+                    <Text style={styles.etaTitle}>Estimated delivery</Text>
+                    <Text style={styles.etaSub}>{formatEstDelivery()}</Text>
+                  </View>
                 </View>
+              </AnimatedRN.View>
+
+              <AnimatedRN.View entering={FadeInDown.duration(420).delay(120)}>
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Shipment Details</Text>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Recipient</Text>
+                    <Text style={styles.detailValue}>{shipment.recipientName}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Address</Text>
+                    <Text style={styles.detailValue} numberOfLines={2}>
+                      {shipment.recipientAddress1}, {shipment.recipientCity},{' '}
+                      {shipment.recipientProvinceCode} {shipment.recipientPostalCode}
+                    </Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Package</Text>
+                    <Text style={styles.detailValue}>{shipment.packageType}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Weight</Text>
+                    <Text style={styles.detailValue}>{shipment.weight}{shipment.weightUnit}</Text>
+                  </View>
+                  {(shipment.length || shipment.width || shipment.height) && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Dimensions</Text>
+                      <Text style={styles.detailValue}>
+                        {[shipment.length, shipment.width, shipment.height].filter(Boolean).join(' \u00D7 ')}
+                        {shipment.sizeUnit ? ` ${shipment.sizeUnit}` : ''}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Service</Text>
+                    <Text style={styles.detailValue}>{shipment.service || shipment.postageType || '\u2014'}</Text>
+                  </View>
+                  {shipment.insured && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Insurance</Text>
+                      <Text style={styles.detailValue}>Included</Text>
+                    </View>
+                  )}
+                  {shipment.signatureConfirmation && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Signature</Text>
+                      <Text style={styles.detailValue}>Required</Text>
+                    </View>
+                  )}
+                  <View style={[styles.detailRow, styles.detailRowLast]}>
+                    <Text style={styles.detailLabel}>Total charged</Text>
+                    <Text style={styles.detailTotal}>${shipment.customerTotal?.toFixed(2)}</Text>
+                  </View>
+                </View>
+              </AnimatedRN.View>
+
+              {events.length > 0 && (
+                <AnimatedRN.View entering={FadeInDown.duration(420).delay(160)}>
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Tracking</Text>
+                    <View style={styles.timeline}>
+                      {events.map((ev, i) => {
+                        const isLatest = i === 0;
+                        const isLast = i === events.length - 1;
+                        return (
+                          <AnimatedRN.View
+                            key={i}
+                            entering={FadeInDown.duration(360).delay(Math.min(i, 8) * 60)}
+                            layout={LinearTransition.springify().damping(20).stiffness(220)}
+                            style={styles.tlRow}
+                          >
+                            <View style={styles.tlRail}>
+                              <View style={[styles.tlNode, isLatest && styles.tlNodeActive]} />
+                              {!isLast && <View style={[styles.tlLine, isLatest && styles.tlLineActive]} />}
+                            </View>
+                            <View style={styles.tlBody}>
+                              <Text style={[styles.tlDesc, !isLatest && styles.tlInactive]}>
+                                {ev.description || ev.status}
+                              </Text>
+                              <View style={styles.tlMeta}>
+                                {ev.location && (
+                                  <View style={styles.tlLoc}>
+                                    <Ionicons name="location-outline" size={11} color={colors.faint} />
+                                    <Text style={styles.tlSub}>{ev.location}</Text>
+                                  </View>
+                                )}
+                                {ev.date && <Text style={styles.tlSub}>{formatDate(ev.date)}</Text>}
+                              </View>
+                              {isLatest && isInTransit && <PulseTag />}
+                            </View>
+                          </AnimatedRN.View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </AnimatedRN.View>
               )}
-            </TouchableOpacity>
 
-            {CAN_VOID.includes(shipment.status) && (
-              <TouchableOpacity
-                style={styles.voidBtn}
-                onPress={voidLabel}
-                disabled={voidShipment.isPending}
-              >
-                {voidShipment.isPending ? (
-                  <ActivityIndicator size="small" color={colors.red} />
-                ) : (
-                  <>
-                    <Ionicons name="close-circle-outline" size={20} color={colors.red} />
-                    <Text style={styles.voidText}>Void label</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
+              <AnimatedRN.View entering={FadeInDown.duration(420).delay(200)}>
+                <PressableCard style={styles.labelRow} onPress={openLabel} disabled={sharing} haptic="light">
+                  <View style={styles.labelIcon}>
+                    <Ionicons name="document-text" size={22} color={colors.accent} />
+                  </View>
+                  <View style={styles.labelInfo}>
+                    <Text style={styles.labelTitle}>Shipping Label</Text>
+                    <Text style={styles.labelSub}>PDF \u00B7 {shipment.labelFormat || '4\u00D76'}</Text>
+                  </View>
+                  {sharing ? (
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  ) : (
+                    <View style={styles.labelCta}>
+                      <Text style={styles.labelCtaText}>View</Text>
+                      <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+                    </View>
+                  )}
+                </PressableCard>
+              </AnimatedRN.View>
 
-            <View style={{ height: 40 }} />
-          </>
-        )}
-      </ScrollView>
-    </View>
+              {CAN_VOID.includes(shipment.status) && (
+                <AnimatedRN.View entering={FadeInDown.duration(420).delay(240)}>
+                  <PressableScale
+                    style={styles.voidBtn}
+                    onPress={voidLabel}
+                    disabled={voidShipment.isPending}
+                    haptic="warning"
+                  >
+                    {voidShipment.isPending ? (
+                      <ActivityIndicator size="small" color={colors.red} />
+                    ) : (
+                      <>
+                        <Ionicons name="close-circle-outline" size={20} color={colors.red} />
+                        <Text style={styles.voidText}>Void label</Text>
+                      </>
+                    )}
+                  </PressableScale>
+                </AnimatedRN.View>
+              )}
+
+              <View style={{ height: 40 }} />
+            </>
+          )}
+        </ScrollView>
+      </View>
+    </AnimatedScreen>
   );
 }
 
@@ -307,7 +339,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg, paddingTop: 60, paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm,
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,

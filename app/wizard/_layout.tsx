@@ -1,15 +1,18 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import Animated, { FadeInUp, FadeInDown } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useWallet } from '@/store/wallet';
 import { useGetRates, useCreateShipment } from '@/lib/queries';
 import api from '@/lib/api';
-import { StepAddress } from '@/components/wizard/StepAddress';
-import { StepPackage } from '@/components/wizard/StepPackage';
-import { StepCustoms } from '@/components/wizard/StepCustoms';
+import { bytesToBase64 } from '@/lib/base64';
+import { StepAddress, type StepAddressRef } from '@/components/wizard/StepAddress';
+import { StepPackage, type StepPackageRef } from '@/components/wizard/StepPackage';
+import { StepCustoms, type StepCustomsRef } from '@/components/wizard/StepCustoms';
 import { StepRates } from '@/components/wizard/StepRates';
 import { StepReview } from '@/components/wizard/StepReview';
 import { SuccessScreen } from '@/components/wizard/SuccessScreen';
@@ -17,15 +20,25 @@ import { SkuSheet } from '@/components/wizard/SkuSheet';
 import { DEFAULT_WIZARD, STEP_TITLES, STEP_SUBS } from '@/components/wizard/types';
 import type { WizardState } from '@/components/wizard/types';
 import { colors, spacing, borderRadius, typography, shadows } from '@/lib/theme';
+import { toast } from '@/lib/toast';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
 
 export default function WizardScreen() {
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState<1 | -1>(1);
   const [state, setState] = useState<WizardState>(DEFAULT_WIZARD);
   const [skuSheet, setSkuSheet] = useState(false);
   const [done, setDone] = useState<{ id: string; price: number } | null>(null);
   const [buying, setBuying] = useState(false);
   const [rates, setRates] = useState<{ id: string; totalPrice: number }[] | null>(null);
   const [ratesLoading, setRatesLoading] = useState(false);
+  const [ratesError, setRatesError] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const addressRef = useRef<StepAddressRef>(null);
+  const packageRef = useRef<StepPackageRef>(null);
+  const customsRef = useRef<StepCustomsRef>(null);
+  const insets = useSafeAreaInsets();
 
   const balance = useWallet((s) => s.balance);
   const deduct = useWallet((s) => s.deduct);
@@ -72,10 +85,46 @@ export default function WizardScreen() {
     return selected?.totalPrice ?? 0;
   }, [rates, state.rateId]);
 
+  const advance = useCallback((s: number) => {
+    setDirection(1);
+    Haptics.light();
+    setStep(s);
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, []);
+
   const goNext = useCallback(async () => {
+    if (step === 0) {
+      const ok = addressRef.current?.validate();
+      if (ok === false) {
+        addressRef.current?.focusFirstError();
+        toast.error('Please complete the recipient details');
+        return;
+      }
+      advance(step + 1);
+      return;
+    }
+
+    if (step === 1) {
+      const ok = packageRef.current?.validate();
+      if (ok === false) {
+        packageRef.current?.focusFirstError();
+        toast.error('Enter a valid weight and dimensions');
+        return;
+      }
+      advance(step + 1);
+      return;
+    }
+
     if (step === 2) {
+      const ok = customsRef.current?.validate();
+      if (ok === false) {
+        customsRef.current?.focusFirstError();
+        toast.error('Complete the customs declarations');
+        return;
+      }
       setRatesLoading(true);
-      setStep(3);
+      setRatesError(false);
+      advance(3);
       try {
         const res = await getRates.mutateAsync({
           fromPostalCode: 'M5T2C9',
@@ -89,21 +138,31 @@ export default function WizardScreen() {
         });
         setRates(res.rates);
       } catch {
-        setRates([
-          { id: 'ECO', totalPrice: 11.13 },
-          { id: 'TRK', totalPrice: 16.05 },
-          { id: 'EXP', totalPrice: 21.40 },
-          { id: 'PRI', totalPrice: 29.83 },
-        ]);
+        setRates(null);
+        setRatesError(true);
+        toast.error('Could not fetch rates — try again');
       } finally {
         setRatesLoading(false);
-        const el = document.getElementById('wizard-scroll');
-        el?.scrollTo({ top: 0, behavior: 'smooth' });
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
       }
       return;
     }
 
+    if (step === 3) {
+      if (!state.rateId) {
+        toast.warning('Select a shipping rate to continue');
+        return;
+      }
+      advance(step + 1);
+      return;
+    }
+
     if (step === 4) {
+      const total = getTotal();
+      if (balance < total) {
+        toast.error('Insufficient wallet balance');
+        return;
+      }
       setBuying(true);
       try {
         const ship = await createShipment.mutateAsync({
@@ -119,20 +178,22 @@ export default function WizardScreen() {
           postageType: state.rateId,
         });
         deduct(ship.customerTotal || 0);
+        Haptics.success();
         setDone({ id: ship.shipCode, price: ship.customerTotal });
-      } catch {
+        toast.success('Shipment purchased');
+      } catch (e: any) {
         setBuying(false);
+        Haptics.error();
+        toast.error(e?.message || 'Could not complete shipment');
       }
       return;
     }
-
-    setStep((s) => s + 1);
-    const el = document.getElementById('wizard-scroll');
-    el?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [step, state, getRates, createShipment, deduct]);
+  }, [step, state, getRates, createShipment, deduct, balance, getTotal, advance]);
 
   const goBack = useCallback(() => {
     if (step === 0) { router.back(); return; }
+    setDirection(-1);
+    Haptics.light();
     setStep((s) => s - 1);
     if (step === 3) { setRates(null); }
   }, [step]);
@@ -147,7 +208,8 @@ export default function WizardScreen() {
           onViewLabel={async () => {
             try {
               const res = await api.get(`/shipments/${done.id}/label`, { responseType: 'arraybuffer' });
-              const base64 = btoa(new Uint8Array(res.data).reduce((d, b) => d + String.fromCharCode(b), ''));
+              const bytes = res.data instanceof Uint8Array ? res.data : new Uint8Array(res.data);
+              const base64 = bytesToBase64(bytes);
               const uri = FileSystem.documentDirectory + `label-${done.id}.pdf`;
               await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
               if (await Sharing.isAvailableAsync()) {
@@ -173,57 +235,112 @@ export default function WizardScreen() {
     }
   })();
 
-  const ctaText = buying ? 'Purchasing…' : step < 4 ? 'Continue' : 'Pay now';
+  const ctaText = buying ? 'Purchasing…' : step < 4 ? 'Continue' : 'Pay with wallet';
   const total = getTotal();
+  const reviewRateName =
+    state.rateId === 'EXP' ? 'Stallion Express'
+    : state.rateId === 'PRI' ? 'Stallion Priority'
+    : state.rateId === 'ECO' ? 'Stallion Economy'
+    : 'Stallion Tracked';
+  const reviewRateDays =
+    state.rateId === 'EXP' ? '2–3 business days'
+    : state.rateId === 'PRI' ? '1–2 business days'
+    : state.rateId === 'ECO' ? '5–8 business days'
+    : '3–5 business days';
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.navBtn} onPress={goBack}>
+      <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+        <PressableScale style={styles.navBtn} onPress={goBack} haptic="light">
           <Ionicons name="chevron-back" size={20} color={colors.ink} />
-        </TouchableOpacity>
+        </PressableScale>
         <Text style={styles.headerTitle}>New shipment</Text>
-        <TouchableOpacity style={styles.navBtn} onPress={() => router.back()}>
+        <PressableScale style={styles.navBtn} onPress={() => router.back()} haptic="light">
           <Ionicons name="close" size={18} color={colors.ink} />
-        </TouchableOpacity>
-      </View>
+        </PressableScale>
+      </Animated.View>
 
-      <View style={styles.progress}>
+      <Animated.View entering={FadeInDown.duration(360).delay(50)} style={styles.progress}>
         {STEP_TITLES.map((_, i) => (
           <View key={i} style={styles.seg}>
             <View style={[
               styles.segFill,
+              (i < step || (i === step && step === STEP_TITLES.length - 1)) && styles.segDone,
+              i === step && step < STEP_TITLES.length - 1 && styles.segCurrent,
               i < step && styles.segDone,
-              i === step && styles.segCurrent,
             ]} />
           </View>
         ))}
-      </View>
+      </Animated.View>
 
-      <View style={styles.stepHeader}>
+      <Animated.View
+        key={`step-header-${step}`}
+        entering={FadeInUp.duration(320)}
+        style={styles.stepHeader}
+      >
         <Text style={styles.stepCount}>Step {step + 1} of {STEP_TITLES.length}</Text>
         <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
         <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
-      </View>
+      </Animated.View>
 
       <ScrollView
-        id="wizard-scroll"
+        ref={scrollRef}
         style={styles.content}
         contentContainerStyle={styles.contentInner}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {step === 0 && <StepAddress state={state} set={patch} />}
-        {step === 1 && <StepPackage state={state} set={patch} onOpenSku={() => setSkuSheet(true)} />}
-        {step === 2 && <StepCustoms state={state} set={patch} />}
-        {step === 3 && <StepRates state={state} set={patch} rates={rates ? { rates } : null} isLoading={ratesLoading} />}
-        {step === 4 && <StepReview state={state} balance={balance} />}
+        {step === 0 && (
+          <Animated.View key="step-0" entering={FadeInUp.duration(360)}>
+            <StepAddress ref={addressRef} state={state} set={patch} />
+          </Animated.View>
+        )}
+        {step === 1 && (
+          <Animated.View key="step-1" entering={FadeInUp.duration(360)}>
+            <StepPackage ref={packageRef} state={state} set={patch} onOpenSku={() => setSkuSheet(true)} />
+          </Animated.View>
+        )}
+        {step === 2 && (
+          <Animated.View key="step-2" entering={FadeInUp.duration(360)}>
+            <StepCustoms ref={customsRef} state={state} set={patch} />
+          </Animated.View>
+        )}
+        {step === 3 && (
+          <Animated.View key="step-3" entering={FadeInUp.duration(360)}>
+            <StepRates
+              state={state}
+              set={patch}
+              rates={rates ? { rates } : null}
+              isLoading={ratesLoading}
+              error={ratesError}
+              onRetry={() => goNext()}
+            />
+          </Animated.View>
+        )}
+        {step === 4 && (
+          <Animated.View key="step-4" entering={FadeInUp.duration(360)}>
+            <StepReview
+              state={state}
+              balance={balance}
+              total={total || undefined}
+              rateName={reviewRateName}
+              rateDays={reviewRateDays}
+              subtotal={total ? total / 1.13 : undefined}
+              tax={total ? total - total / 1.13 : undefined}
+            />
+          </Animated.View>
+        )}
       </ScrollView>
 
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
-          <Ionicons name="chevron-back" size={16} color={colors.ink} />
-          <Text style={styles.backBtnText}>Back</Text>
-        </TouchableOpacity>
+        {step > 0 ? (
+          <PressableScale style={styles.backBtn} onPress={goBack} haptic="light">
+            <Ionicons name="chevron-back" size={16} color={colors.ink} />
+            <Text style={styles.backBtnText}>Back</Text>
+          </PressableScale>
+        ) : (
+          <View style={styles.backBtnPlaceholder} />
+        )}
         {step === 4 && (
           <View style={styles.footTotal}>
             <Text style={styles.footTotalLabel}>Total · incl. tax</Text>
@@ -232,17 +349,23 @@ export default function WizardScreen() {
             </Text>
           </View>
         )}
-        <TouchableOpacity
+        <PressableScale
           style={[styles.cta, !canContinue && styles.ctaDisabled]}
           onPress={goNext}
           disabled={!canContinue || buying}
+          haptic={step === 4 ? 'success' : 'light'}
         >
           {buying ? (
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
-            <Text style={styles.ctaText}>{ctaText}</Text>
+            <>
+              {step === 4 ? (
+                <Ionicons name="wallet" size={16} color={colors.white} style={{ marginRight: 6 }} />
+              ) : null}
+              <Text style={styles.ctaText}>{ctaText}</Text>
+            </>
           )}
-        </TouchableOpacity>
+        </PressableScale>
       </View>
 
       <SkuSheet open={skuSheet} onClose={() => setSkuSheet(false)} onPick={applySku} />
@@ -257,7 +380,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
-    paddingTop: 60,
     paddingBottom: spacing.sm,
   },
   navBtn: {
@@ -326,14 +448,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderRadius: borderRadius.sm,
     backgroundColor: colors.surface,
-    ...shadows.sm,
+    borderWidth: 1,
+    borderColor: colors.hairline,
   },
+  backBtnPlaceholder: { width: 1 },
   backBtnText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: colors.ink,
   },
-  footTotal: { alignItems: 'flex-end' },
+  footTotal: { alignItems: 'flex-end', flex: 1 },
   footTotalLabel: {
     fontSize: 12.5,
     fontWeight: '600',
@@ -352,7 +476,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
     minWidth: 0,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+    elevation: 4,
   },
   ctaDisabled: { opacity: 0.42 },
   ctaText: { color: colors.white, fontSize: 16, fontWeight: '600' },

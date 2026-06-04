@@ -1,13 +1,17 @@
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useState, useCallback, useRef } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { FadeInUp, FadeInDown, ZoomIn } from 'react-native-reanimated';
 import { useParseBatch, useGetRates, useCreateShipment } from '@/lib/queries';
 import { useWallet } from '@/store/wallet';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { colors, spacing, borderRadius } from '@/lib/theme';
+import { PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
 import type { AIParsedAddress } from '@/types';
 
 type Step = 'input' | 'parsing' | 'review' | 'rates' | 'done';
@@ -28,7 +32,9 @@ export default function BatchScreen() {
   const [parsing, setParsing] = useState(false);
   const [reveal, setReveal] = useState(0);
   const [buying, setBuying] = useState(false);
+  const insets = useSafeAreaInsets();
   const [results, setResults] = useState<{ success: number; failed: number; total: number } | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
 
   const balance = useWallet((s) => s.balance);
   const deduct = useWallet((s) => s.deduct);
@@ -39,6 +45,7 @@ export default function BatchScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const total = addresses.reduce((s, a) => s + (a.ratePrice || 0), 0);
+  const ratedCount = addresses.filter((a) => a.rateId).length;
   const canAfford = balance >= total;
 
   const doParse = useCallback(async () => {
@@ -46,6 +53,7 @@ export default function BatchScreen() {
     setParsing(true);
     setStep('parsing');
     setReveal(0);
+    setParseError(null);
     try {
       const data = await parseBatch.mutateAsync(text);
       const parsed = data.addresses.map((a: AIParsedAddress) => ({
@@ -61,22 +69,9 @@ export default function BatchScreen() {
         setNotes(data.processing_notes || []);
         setStep('review');
       }, 350 + parsed.length * 280 + 200);
-    } catch {
-      const fallback = [
-        { name: 'Priya Sharma', address1: '1450 Howe St', city: 'Vancouver', province_code: 'BC', postal_code: 'V6Z 1R8', country_code: 'CA', confidence: 95, warnings: [], original_text: 'Priya Sharma, 1450 Howe St, Vancouver BC V6Z 1R8', weight: 1, weight_unit: 'lb' },
-        { name: 'Léa Tremblay', address1: '4200 Rue Saint-Denis', city: 'Montréal', province_code: 'QC', postal_code: 'H2J 2L1', country_code: 'CA', confidence: 92, warnings: [], original_text: 'Léa Tremblay, 4200 Rue Saint-Denis, Montréal QC H2J 2L1', weight: 2.5, weight_unit: 'lb' },
-        { name: 'Tom Becker', address1: '815 1 St SW', city: 'Calgary', province_code: 'AB', postal_code: 'T2P 1N3', country_code: 'CA', confidence: 90, warnings: [], original_text: 'Tom Becker, 815 1 St SW, Calgary AB T2P 1N3', weight: 1.5, weight_unit: 'lb' },
-        { name: 'Grace Liu', address1: '1741 Lower Water St', city: 'Halifax', province_code: 'NS', postal_code: 'B3J 1S5', country_code: 'CA', confidence: 94, warnings: [], original_text: 'Grace Liu, 1741 Lower Water St, Halifax NS B3J 1S5', weight: 2, weight_unit: 'lb' },
-        { name: "Daniel O'Connor", address1: '90 Eglinton Ave E', city: 'Toronto', province_code: 'ON', postal_code: 'M4P 2Y3', country_code: 'CA', confidence: 96, warnings: [], original_text: "Daniel O'Connor, 90 Eglinton Ave E, Toronto ON M4P 2Y3", weight: 1, weight_unit: 'lb' },
-      ];
-      fallback.forEach((_: any, i: number) => {
-        setTimeout(() => setReveal(i + 1), 350 + i * 280);
-      });
-      setTimeout(() => {
-        setAddresses(fallback);
-        setNotes(['Demo mode — showing sample addresses']);
-        setStep('review');
-      }, 350 + fallback.length * 280 + 200);
+    } catch (err: any) {
+      setParseError(err?.message || 'Failed to parse addresses');
+      setStep('input');
     } finally {
       setParsing(false);
     }
@@ -146,28 +141,38 @@ export default function BatchScreen() {
   if (step === 'done' && results) {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/(tabs)')}>
+        <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <PressableScale style={styles.backBtn} onPress={() => router.replace('/(tabs)')} haptic="light">
             <Ionicons name="close" size={18} color={colors.ink} />
-          </TouchableOpacity>
+          </PressableScale>
           <View style={styles.headerCenter}>
             <Ionicons name="checkmark-circle" size={18} color={colors.green} />
             <Text style={styles.headerTitle}>Batch complete</Text>
           </View>
           <View style={{ width: 40 }} />
-        </View>
+        </Animated.View>
         <View style={styles.doneWrap}>
-          <LinearGradient colors={[colors.greenSoft, 'transparent']} style={styles.successRing}>
-            <Ionicons name="checkmark-circle" size={80} color={colors.green} />
-          </LinearGradient>
-          <Text style={styles.doneTitle}>{results.success} of {results.total} labels purchased</Text>
-          <Text style={styles.doneSub}>Charged ${total.toFixed(2)} from your wallet</Text>
+          <Animated.View entering={ZoomIn.duration(560).springify().damping(14)}>
+            <LinearGradient colors={[colors.greenSoft, 'transparent']} style={styles.successRing}>
+              <Ionicons name="checkmark-circle" size={80} color={colors.green} />
+            </LinearGradient>
+          </Animated.View>
+          <Animated.Text entering={FadeInUp.duration(360).delay(160)} style={styles.doneTitle}>
+            {results.success} of {results.total} labels purchased
+          </Animated.Text>
+          <Animated.Text entering={FadeInUp.duration(360).delay(240)} style={styles.doneSub}>
+            Charged ${total.toFixed(2)} from your wallet
+          </Animated.Text>
           {results.failed > 0 && (
-            <Text style={styles.doneFail}>{results.failed} label{results.failed !== 1 ? 's' : ''} failed</Text>
+            <Animated.Text entering={FadeInUp.duration(360).delay(300)} style={styles.doneFail}>
+              {results.failed} label{results.failed !== 1 ? 's' : ''} failed
+            </Animated.Text>
           )}
-          <Button onPress={() => router.replace('/(tabs)/shipments')} style={{ marginTop: spacing['2xl'] }}>
-            View shipments
-          </Button>
+          <Animated.View entering={FadeInUp.duration(360).delay(360)} style={{ marginTop: spacing['2xl'] }}>
+            <Button onPress={() => router.replace('/(tabs)/shipments')} haptic="success" full>
+              View shipments
+            </Button>
+          </Animated.View>
         </View>
       </View>
     );
@@ -175,31 +180,38 @@ export default function BatchScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+      <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+        <PressableScale style={styles.backBtn} onPress={() => router.back()} haptic="light">
           <Ionicons name="chevron-back" size={20} color={colors.ink} />
-        </TouchableOpacity>
+        </PressableScale>
         <View style={styles.headerCenter}>
           <Ionicons name="sparkles" size={16} color={colors.accent} />
           <Text style={styles.headerTitle}>Magic Batch</Text>
         </View>
         <View style={{ width: 40 }} />
-      </View>
+      </Animated.View>
 
-      <View style={styles.progress}>
+      <Animated.View entering={FadeInDown.duration(360).delay(60)} style={styles.progress}>
         <View style={[styles.seg, step !== 'input' && step !== 'parsing' && styles.segDone]} />
         <View style={[styles.seg, step === 'rates' && styles.segDone]} />
         <View style={[styles.seg, step === 'rates' && styles.segActive]} />
-      </View>
+      </Animated.View>
 
       {step === 'input' && (
         <>
-          <View style={styles.hero}>
+          <Animated.View entering={FadeInUp.duration(360).delay(120)} style={styles.hero}>
             <Text style={styles.heroTitle}>Paste & go</Text>
             <Text style={styles.heroSub}>
               Drop in messy text — AI sorts every address into ready-to-ship rows.
             </Text>
-          </View>
+          </Animated.View>
+
+          {parseError && (
+            <Animated.View entering={FadeInDown.duration(360)} style={styles.parseError}>
+              <Ionicons name="cloud-offline-outline" size={18} color={colors.red} />
+              <Text style={styles.parseErrorText}>{parseError}</Text>
+            </Animated.View>
+          )}
 
           <ScrollView style={styles.inputArea} keyboardShouldPersistTaps="handled" ref={scrollRef}>
             <TextInput
@@ -214,18 +226,22 @@ export default function BatchScreen() {
               Tom / 815 1 St SW, Calgary AB …"
             />
             <View style={styles.inputActions}>
-              <TouchableOpacity style={styles.ghostLink} onPress={() => setText('Priya Sharma — 1450 Howe St, Vancouver BC V6Z 1R8\nLéa Tremblay — 4200 Rue Saint-Denis, Montréal QC H2J 2L1\nTom Becker — 815 1 St SW, Calgary AB T2P 1N3\nGrace Liu — 1741 Lower Water St, Halifax NS B3J 1S5\nDaniel O\'Connor — 90 Eglinton Ave E, Toronto ON M4P 2Y3')}>
+              <PressableScale
+                style={styles.ghostLink}
+                onPress={() => { Haptics.light(); setText('Priya Sharma — 1450 Howe St, Vancouver BC V6Z 1R8\nLéa Tremblay — 4200 Rue Saint-Denis, Montréal QC H2J 2L1\nTom Becker — 815 1 St SW, Calgary AB T2P 1N3\nGrace Liu — 1741 Lower Water St, Halifax NS B3J 1S5\nDaniel O\'Connor — 90 Eglinton Ave E, Toronto ON M4P 2Y3'); }}
+                haptic="light"
+              >
                 <Ionicons name="copy-outline" size={15} color={colors.accent} />
                 <Text style={styles.ghostLinkText}>Paste sample</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.visionBtn}>
+              </PressableScale>
+              <PressableScale style={styles.visionBtn} onPress={() => Haptics.light()} haptic="light">
                 <Ionicons name="scan" size={17} color={colors.accent} />
                 <Text style={styles.visionBtnText}>AI Vision</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </ScrollView>
 
-          <View style={styles.footer}>
+          <Animated.View entering={FadeInUp.duration(360).delay(160)} style={styles.footer}>
             <View style={styles.hintRow}>
               <Ionicons name="sparkles" size={14} color={colors.accent} />
               <Text style={styles.hint}>AI-powered address parsing</Text>
@@ -235,23 +251,28 @@ export default function BatchScreen() {
               disabled={!text.trim() || parsing}
               loading={parsing}
               onPress={doParse}
+              haptic="success"
             >
               Parse with AI
             </Button>
-          </View>
+          </Animated.View>
         </>
       )}
 
       {step === 'parsing' && (
         <>
-          <View style={styles.parsingHead}>
+          <Animated.View entering={FadeInDown.duration(360)} style={styles.parsingHead}>
             <ActivityIndicator size="small" color={colors.accent} />
             <Text style={styles.parsingText}>AI parsing addresses…</Text>
-          </View>
+          </Animated.View>
           <ScrollView style={styles.addrList} contentContainerStyle={styles.addrListInner}>
             {addresses.slice(0, Math.max(reveal, 5)).map((a, i) => (
               i < reveal ? (
-                <View key={i} style={styles.parsedRow}>
+                <Animated.View
+                  key={i}
+                  entering={FadeInDown.duration(360)}
+                  style={styles.parsedRow}
+                >
                   <View style={styles.batchNum}>
                     <Text style={styles.batchNumText}>{i + 1}</Text>
                   </View>
@@ -260,7 +281,7 @@ export default function BatchScreen() {
                     <Text style={styles.parsedLine} numberOfLines={1}>{a.address1}, {a.city} {a.province_code}</Text>
                   </View>
                   <Ionicons name="checkmark-circle" size={18} color={colors.green} />
-                </View>
+                </Animated.View>
               ) : (
                 <View key={i} style={styles.parsedRow}>
                   <View style={[styles.batchNum, { backgroundColor: colors.surface2 }]} />
@@ -272,17 +293,17 @@ export default function BatchScreen() {
               )
             ))}
           </ScrollView>
-          <View style={styles.footer}>
+          <Animated.View entering={FadeInUp.duration(360)} style={styles.footer}>
             <Button full disabled loading>
               Parsing addresses…
             </Button>
-          </View>
+          </Animated.View>
         </>
       )}
 
       {(step === 'review' || step === 'rates') && (
         <>
-          <View style={styles.batchSummary}>
+          <Animated.View entering={FadeInUp.duration(360).delay(80)} style={styles.batchSummary}>
             <View style={styles.batchSummaryRow}>
               <View>
                 <Text style={styles.batchCount}>{addresses.length} shipment{addresses.length !== 1 ? 's' : ''}</Text>
@@ -299,82 +320,92 @@ export default function BatchScreen() {
                 <Text style={styles.noteText}>{n}</Text>
               </View>
             ))}
-          </View>
+          </Animated.View>
 
           <ScrollView style={styles.addrList} contentContainerStyle={styles.addrListInner} ref={scrollRef}>
             {addresses.map((a, i) => (
-              <Card key={i} padding={16} style={{ gap: 10 }}>
-                <View style={styles.addrCardHeader}>
-                  <View style={styles.batchNum}>
-                    <Text style={styles.batchNumText}>{i + 1}</Text>
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.addrName}>{a.name}</Text>
-                    <Text style={styles.addrLine}>
-                      {a.address1}{a.address2 ? `, ${a.address2}` : ''}
-                    </Text>
-                    <Text style={styles.addrLine}>
-                      {a.city}, {a.province_code} {a.postal_code}
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={() => removeAddress(i)} style={styles.removeBtn}>
-                    <Ionicons name="close-circle" size={20} color={colors.red} />
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.addrMeta}>
-                  <Ionicons name="cube-outline" size={14} color={colors.faint} />
-                  <Text style={styles.addrMetaText}>
-                    {a.weight || 1} {a.weight_unit || 'lb'}
-                  </Text>
-                  {a.detected_product && (
-                    <>
-                      <View style={styles.metaDot} />
-                      <Ionicons name="pricetag-outline" size={14} color={colors.faint} />
-                      <Text style={styles.addrMetaText}>{a.detected_product}</Text>
-                    </>
-                  )}
-                  {a.detected_quantity && (
-                    <>
-                      <View style={styles.metaDot} />
-                      <Ionicons name="layers-outline" size={14} color={colors.faint} />
-                      <Text style={styles.addrMetaText}>×{a.detected_quantity}</Text>
-                    </>
-                  )}
-                </View>
-
-                <View style={styles.confRow}>
-                  <View style={styles.confBar}>
-                    <View style={[styles.confFill, { width: `${a.confidence}%` }]} />
-                  </View>
-                  <Text style={styles.confText}>{a.confidence}%</Text>
-                </View>
-
-                {step === 'rates' && (
-                  <View style={styles.rateRow}>
-                    {a.loadingRate ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <ActivityIndicator size="small" color={colors.accent} />
-                        <Text style={{ fontSize: 13, color: colors.faint }}>Getting rates…</Text>
-                      </View>
-                    ) : a.error ? (
-                      <Text style={styles.rateError}>{a.error}</Text>
-                    ) : a.ratePrice ? (
-                      <Text style={styles.rateValue}>
-                        {a.rateName}: <Text style={styles.ratePrice}>${a.ratePrice.toFixed(2)}</Text>
+              <Animated.View
+                key={i}
+                entering={FadeInDown.duration(360).delay(120 + i * 60)}
+              >
+                <Card padding={16} style={{ gap: 10 }}>
+                  <View style={styles.addrCardHeader}>
+                    <View style={styles.batchNum}>
+                      <Text style={styles.batchNumText}>{i + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.addrName}>{a.name}</Text>
+                      <Text style={styles.addrLine}>
+                        {a.address1}{a.address2 ? `, ${a.address2}` : ''}
                       </Text>
-                    ) : (
-                      <Text style={{ fontSize: 13, color: colors.faint }}>Awaiting rates…</Text>
+                      <Text style={styles.addrLine}>
+                        {a.city}, {a.province_code} {a.postal_code}
+                      </Text>
+                    </View>
+                    <PressableScale
+                      onPress={() => { Haptics.light(); removeAddress(i); }}
+                      style={styles.removeBtn}
+                      haptic="light"
+                      scaleTo={0.85}
+                    >
+                      <Ionicons name="close-circle" size={20} color={colors.red} />
+                    </PressableScale>
+                  </View>
+
+                  <View style={styles.addrMeta}>
+                    <Ionicons name="cube-outline" size={14} color={colors.faint} />
+                    <Text style={styles.addrMetaText}>
+                      {a.weight || 1} {a.weight_unit || 'lb'}
+                    </Text>
+                    {a.detected_product && (
+                      <>
+                        <View style={styles.metaDot} />
+                        <Ionicons name="pricetag-outline" size={14} color={colors.faint} />
+                        <Text style={styles.addrMetaText}>{a.detected_product}</Text>
+                      </>
+                    )}
+                    {a.detected_quantity && (
+                      <>
+                        <View style={styles.metaDot} />
+                        <Ionicons name="layers-outline" size={14} color={colors.faint} />
+                        <Text style={styles.addrMetaText}>×{a.detected_quantity}</Text>
+                      </>
                     )}
                   </View>
-                )}
-              </Card>
+
+                  <View style={styles.confRow}>
+                    <View style={styles.confBar}>
+                      <View style={[styles.confFill, { width: `${a.confidence}%` }]} />
+                    </View>
+                    <Text style={styles.confText}>{a.confidence}%</Text>
+                  </View>
+
+                  {step === 'rates' && (
+                    <View style={styles.rateRow}>
+                      {a.loadingRate ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <ActivityIndicator size="small" color={colors.accent} />
+                          <Text style={{ fontSize: 13, color: colors.faint }}>Getting rates…</Text>
+                        </View>
+                      ) : a.error ? (
+                        <Text style={styles.rateError}>{a.error}</Text>
+                      ) : a.ratePrice ? (
+                        <Text style={styles.rateValue}>
+                          {a.rateName}: <Text style={styles.ratePrice}>${a.ratePrice.toFixed(2)}</Text>
+                        </Text>
+                      ) : (
+                        <Text style={{ fontSize: 13, color: colors.faint }}>Awaiting rates…</Text>
+                      )}
+                    </View>
+                  )}
+                </Card>
+              </Animated.View>
             ))}
           </ScrollView>
 
-          <View style={styles.footer}>
+          <Animated.View entering={FadeInUp.duration(360).delay(120)} style={styles.footer}>
             {step === 'review' && (
-              <Button full onPress={rateAll}>
+              <Button full onPress={rateAll} haptic="medium">
                 {'Get rates for all ' + addresses.length}
               </Button>
             )}
@@ -386,15 +417,20 @@ export default function BatchScreen() {
                 </View>
                 <Button
                   full
-                  disabled={!canAfford}
+                  disabled={!canAfford || ratedCount === 0}
                   loading={buying}
                   onPress={buyAll}
+                  haptic="success"
                 >
-                  {canAfford ? 'Pay & generate' : 'Insufficient balance'}
+                  {!canAfford
+                    ? 'Insufficient balance'
+                    : ratedCount === 0
+                    ? 'No rates available'
+                    : `Pay & generate ${ratedCount}`}
                 </Button>
               </>
             )}
-          </View>
+          </Animated.View>
         </>
       )}
     </View>
@@ -405,7 +441,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing.lg, paddingTop: 60,
+    padding: spacing.lg,
   },
   backBtn: { width: 40, height: 40, borderRadius: borderRadius.full, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 7 },
@@ -447,6 +483,19 @@ const styles = StyleSheet.create({
   },
   hintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'center' },
   hint: { fontSize: 12, color: colors.faint },
+
+  parseError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: colors.redSoft,
+    borderRadius: borderRadius.sm,
+  },
+  parseErrorText: { fontSize: 13, color: colors.red, flex: 1, fontWeight: '500' },
 
   parsingHead: {
     flexDirection: 'row', alignItems: 'center', gap: 8,

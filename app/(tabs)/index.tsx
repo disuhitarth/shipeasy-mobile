@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -7,7 +7,11 @@ import { useWallet } from '@/store/wallet';
 import { useWalletData, useShipments } from '@/lib/queries';
 import { BalanceCard } from '@/components/ui/BalanceCard';
 import { colors, borderRadius, spacing } from '@/lib/theme';
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState } from 'react';
+import { StaggeredItem } from '@/components/Staggered';
+import { AnimatedScreen } from '@/components/AnimatedScreen';
+import { PressableCard, PressableScale } from '@/components/PressableScale';
+import * as Haptics from '@/lib/haptics';
 
 function getInitials(name: string) {
   return name
@@ -38,28 +42,13 @@ export default function HomeScreen() {
   const setBalance = useWallet((s) => s.setBalance);
   const [refreshing, setRefreshing] = useState(false);
 
-  const animCount = 7;
-  const animValues = useRef([...Array(animCount)].map(() => new Animated.Value(0))).current;
-
-  useEffect(() => {
-    Animated.parallel(
-      animValues.map((v, i) =>
-        Animated.timing(v, {
-          toValue: 1,
-          duration: 500,
-          delay: 20 + i * 60,
-          useNativeDriver: true,
-        })
-      )
-    ).start();
-  }, []);
-
   useEffect(() => {
     if (walletData?.balance != null) setBalance(walletData.balance);
   }, [walletData?.balance]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    Haptics.medium();
     await refetch();
     setRefreshing(false);
   }, [refetch]);
@@ -75,26 +64,6 @@ export default function HomeScreen() {
     { icon: 'sparkles' as const, label: 'Magic Batch', route: '/batch', primary: false },
     { icon: 'location' as const, label: 'Addresses', route: '/addresses', primary: false },
   ];
-
-  function StaggerItem({ index, children }: { index: number; children: React.ReactNode }) {
-    return (
-      <Animated.View
-        style={{
-          opacity: animValues[index],
-          transform: [
-            {
-              translateY: animValues[index].interpolate({
-                inputRange: [0, 1],
-                outputRange: [12, 0],
-              }),
-            },
-          ],
-        }}
-      >
-        {children}
-      </Animated.View>
-    );
-  }
 
   function PkgStatusIcon({ status, size = 44 }: { status: string; size?: number }) {
     const c = statusColor(status);
@@ -137,124 +106,137 @@ export default function HomeScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
-      }
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.avatar}>
+    <AnimatedScreen direction="fade-up" duration={420}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+        }
+        showsVerticalScrollIndicator={false}
+      >
+        <StaggeredItem index={0}>
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <View style={styles.avatar}>
+                <LinearGradient
+                  colors={['#8B7BFF', '#635BFF', '#4B45D6']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                />
+                <Text style={styles.avatarText}>{initials}</Text>
+              </View>
+              <View>
+                <Text style={styles.greeting}>Good morning</Text>
+                <Text style={styles.userName}>{userName}</Text>
+              </View>
+            </View>
+            <PressableScale
+              style={styles.notifBtn}
+              onPress={() => Haptics.light()}
+              haptic="light"
+            >
+              <Ionicons name="notifications-outline" size={19} color={colors.ink} />
+              <View style={styles.dot} />
+            </PressableScale>
+          </View>
+        </StaggeredItem>
+
+        <StaggeredItem index={1}>
+          <BalanceCard balance={balance} onAdd={() => router.push('/wallet')} />
+        </StaggeredItem>
+
+        <StaggeredItem index={2}>
+          <View style={styles.qaGrid}>
+            {quickActions.map((qa) => (
+              <PressableCard
+                key={qa.label}
+                style={[styles.qaItem, qa.primary && styles.qaPrimary]}
+                onPress={() => router.push(qa.route)}
+                haptic="light"
+                scaleTo={0.96}
+              >
+                <View style={[styles.qaIcon, qa.primary && styles.qaIconPrimary]}>
+                  <Ionicons name={qa.icon} size={21} color={qa.primary ? '#fff' : colors.accent} />
+                </View>
+                <Text style={[styles.qaLabel, qa.primary && { color: '#fff' }]}>{qa.label}</Text>
+              </PressableCard>
+            ))}
+          </View>
+        </StaggeredItem>
+
+        <StaggeredItem index={3}>
+          <PressableCard
+            style={styles.batchPromo}
+            onPress={() => router.push('/batch')}
+            haptic="light"
+          >
             <LinearGradient
               colors={['#8B7BFF', '#635BFF', '#4B45D6']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
             />
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
-          <View>
-            <Text style={styles.greeting}>Good morning</Text>
-            <Text style={styles.userName}>{userName}</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={styles.notifBtn}>
-          <Ionicons name="notifications-outline" size={19} color={colors.ink} />
-          <View style={styles.dot} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Balance Card */}
-      <StaggerItem index={0}>
-        <BalanceCard balance={balance} onAdd={() => router.push('/wallet')} />
-      </StaggerItem>
-
-      {/* Quick Actions */}
-      <StaggerItem index={1}>
-        <View style={styles.qaGrid}>
-          {quickActions.map((qa) => (
-            <TouchableOpacity
-              key={qa.label}
-              style={[styles.qaItem, qa.primary && styles.qaPrimary]}
-              onPress={() => router.push(qa.route)}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.qaIcon, qa.primary && styles.qaIconPrimary]}>
-                <Ionicons name={qa.icon} size={21} color={qa.primary ? '#fff' : colors.accent} />
-              </View>
-              <Text style={[styles.qaLabel, qa.primary && { color: '#fff' }]}>{qa.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </StaggerItem>
-
-      {/* Magic Batch Promo */}
-      <StaggerItem index={2}>
-        <TouchableOpacity style={styles.batchPromo} onPress={() => router.push('/batch')} activeOpacity={0.9}>
-          <LinearGradient
-            colors={['#8B7BFF', '#635BFF', '#4B45D6']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.batchIcon}>
-            <Ionicons name="sparkles" size={20} color="#fff" />
-          </View>
-          <View style={styles.batchText}>
-            <Text style={styles.batchTitle}>Ship in bulk with Magic Batch</Text>
-            <Text style={styles.batchSub}>
-              Paste a list or scan a photo — AI does the rest
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.6)" />
-        </TouchableOpacity>
-      </StaggerItem>
-
-      {/* Recent Shipments */}
-      {recentShipments.length > 0 && (
-        <>
-          <StaggerItem index={3}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent shipments</Text>
-              <TouchableOpacity onPress={() => router.push('/shipments')}>
-                <Text style={styles.seeAll}>See all</Text>
-              </TouchableOpacity>
+            <View style={styles.batchIcon}>
+              <Ionicons name="sparkles" size={20} color="#fff" />
             </View>
-          </StaggerItem>
-          <View style={styles.group}>
-            {recentShipments.map((s, i) => (
-              <StaggerItem key={s._id} index={4 + i}>
-                <TouchableOpacity
-                  style={[styles.shipmentCell, i > 0 && styles.shipmentCellBorder]}
-                  onPress={() => router.push(`/shipments/${s.shipCode}`)}
-                  activeOpacity={0.7}
+            <View style={styles.batchText}>
+              <Text style={styles.batchTitle}>Ship in bulk with Magic Batch</Text>
+              <Text style={styles.batchSub}>
+                Paste a list or scan a photo — AI does the rest
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.6)" />
+          </PressableCard>
+        </StaggeredItem>
+
+        {recentShipments.length > 0 && (
+          <>
+            <StaggeredItem index={4}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Recent shipments</Text>
+                <PressableScale
+                  onPress={() => router.push('/shipments')}
+                  haptic="light"
+                  style={{ paddingVertical: 4, paddingHorizontal: 6 }}
                 >
-                  <PkgStatusIcon status={s.status} />
-                  <View style={styles.shipmentInfo}>
-                    <Text style={styles.shipmentName} numberOfLines={1}>
-                      {s.items?.[0]?.description || s.recipientName}
-                    </Text>
-                    <Text style={styles.shipmentId}>N° {s.shipCode}</Text>
-                  </View>
-                  <View style={styles.shipmentRight}>
-                    <StatusBadge status={s.status} />
-                    <Text style={styles.shipmentEta}>
-                      {new Date(s.createdAt).toLocaleDateString('en-CA', {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              </StaggerItem>
-            ))}
-          </View>
-        </>
-      )}
-    </ScrollView>
+                  <Text style={styles.seeAll}>See all</Text>
+                </PressableScale>
+              </View>
+            </StaggeredItem>
+            <View style={styles.group}>
+              {recentShipments.map((s, i) => (
+                <StaggeredItem key={s._id} index={5 + i} delayStep={50}>
+                  <PressableCard
+                    style={[styles.shipmentCell, i > 0 && styles.shipmentCellBorder]}
+                    onPress={() => router.push(`/shipments/${s.shipCode}`)}
+                    haptic="light"
+                  >
+                    <PkgStatusIcon status={s.status} />
+                    <View style={styles.shipmentInfo}>
+                      <Text style={styles.shipmentName} numberOfLines={1}>
+                        {s.items?.[0]?.description || s.recipientName}
+                      </Text>
+                      <Text style={styles.shipmentId}>N° {s.shipCode}</Text>
+                    </View>
+                    <View style={styles.shipmentRight}>
+                      <StatusBadge status={s.status} />
+                      <Text style={styles.shipmentEta}>
+                        {new Date(s.createdAt).toLocaleDateString('en-CA', {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </Text>
+                    </View>
+                  </PressableCard>
+                </StaggeredItem>
+              ))}
+            </View>
+          </>
+        )}
+      </ScrollView>
+    </AnimatedScreen>
   );
 }
 

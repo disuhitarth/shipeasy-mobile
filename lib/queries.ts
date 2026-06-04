@@ -9,7 +9,7 @@ export function useShipments(page = 1, status?: string) {
     queryKey: ['shipments', page, status],
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(page), limit: '20' });
-      if (status && status !== 'All') params.set('status', status);
+      if (status) params.set('status', status);
       const res = await api.get<{ shipments: Shipment[]; pagination: Pagination }>(
         `/shipments?${params}`,
       );

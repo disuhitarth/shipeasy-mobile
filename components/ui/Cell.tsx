@@ -1,6 +1,7 @@
-import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { colors, borderRadius } from '@/lib/theme';
 import { Ionicons } from '@expo/vector-icons';
+import { PressableScale } from '@/components/PressableScale';
 
 interface CellProps {
   children: React.ReactNode;
@@ -9,13 +10,21 @@ interface CellProps {
   icon?: string;
   label?: string;
   chevron?: boolean;
+  haptic?: 'none' | 'light' | 'medium' | 'success' | 'warning' | 'error' | 'selection';
 }
 
 function fw(w: string): any { return w; }
 
-export function Cell({ children, onPress, style, icon, label, chevron }: CellProps) {
+export function Cell({ children, onPress, style, icon, label, chevron, haptic }: CellProps) {
   return (
-    <TouchableOpacity style={[styles.cell, style]} onPress={onPress} activeOpacity={0.6}>
+    <PressableScale
+      onPress={onPress}
+      disabled={!onPress}
+      haptic={haptic ?? 'light'}
+      scaleTo={0.985}
+      duration={70}
+      style={[styles.cell, style]}
+    >
       {icon && (
         <View style={styles.cellIcon}>
           <Ionicons name={icon as any} size={18} color={colors.ink} />
@@ -24,7 +33,7 @@ export function Cell({ children, onPress, style, icon, label, chevron }: CellPro
       {label && <Text style={[styles.cellLabel, { fontWeight: fw('560') }]}>{label}</Text>}
       <View style={{ flex: 1 }}>{children}</View>
       {chevron && <Ionicons name="chevron-forward" size={18} color={colors.faint} />}
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 

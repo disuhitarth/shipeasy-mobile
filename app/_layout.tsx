@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { useAuth } from '@/store/auth';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { useAuth, setQueryClientRef } from '@/store/auth';
 import { useBiometric } from '@/store/biometric';
+import { useSettings } from '@/store/settings';
 import {
   configureAndroidChannel,
   setupForegroundHandler,
@@ -13,6 +15,8 @@ import {
   registerPushToken,
   getNotificationData,
 } from '@/lib/notifications';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ToastProvider } from '@/components/ToastProvider';
 
 setupForegroundHandler();
 
@@ -26,23 +30,33 @@ const queryClient = new QueryClient({
   },
 });
 
+setQueryClientRef(queryClient);
+
 function Boot() {
   const loadToken = useAuth((s) => s.loadToken);
   const loadBiometric = useBiometric((s) => s.load);
+  const loadSettings = useSettings((s) => s.load);
+  const settingsLoaded = useSettings((s) => s.loaded);
+  const hasOnboarded = useSettings((s) => s.hasOnboarded);
   const notificationResp = useRef<Notifications.EventSubscription | null>(null);
+  const didRoute = useRef(false);
 
   useEffect(() => {
-    loadToken();
+    let cancelled = false;
+
+    (async () => {
+      await loadToken();
+      if (cancelled) return;
+      if (Platform.OS !== 'web') {
+        const token = await getExpoPushToken();
+        if (!cancelled && token) registerPushToken(token);
+      }
+    })();
+
     loadBiometric();
+    loadSettings();
     if (Platform.OS !== 'web') configureAndroidChannel();
 
-    // Register push token after auth loads
-    const timeout = setTimeout(async () => {
-      const token = await getExpoPushToken();
-      if (token) registerPushToken(token);
-    }, 2000);
-
-    // Handle notification tap when app was killed — native only
     if (Platform.OS !== 'web') {
       Notifications.getLastNotificationResponseAsync().then((resp) => {
         if (resp) handleNotificationTap(resp.notification);
@@ -54,10 +68,19 @@ function Boot() {
     }
 
     return () => {
-      clearTimeout(timeout);
+      cancelled = true;
       notificationResp.current?.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (settingsLoaded && !didRoute.current) {
+      didRoute.current = true;
+      if (!hasOnboarded) {
+        router.replace('/onboarding');
+      }
+    }
+  }, [settingsLoaded, hasOnboarded]);
 
   return null;
 }
@@ -73,20 +96,42 @@ function handleNotificationTap(notification: Notifications.Notification) {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <Boot />
-      <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="auth/login" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="auth/register" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="wizard" options={{ animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="batch" options={{ animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="shipments/[id]" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="skus" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="addresses" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="ship-now" options={{ animation: 'slide_from_right' }} />
-      </Stack>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <Boot />
+            <StatusBar style="dark" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                animation: 'slide_from_right',
+                animationDuration: 280,
+                gestureEnabled: true,
+              }}
+            >
+              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+              <Stack.Screen name="onboarding" options={{ animation: 'fade', gestureEnabled: false }} />
+              <Stack.Screen name="auth/login" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
+              <Stack.Screen name="auth/register" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
+              <Stack.Screen name="wizard" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+              <Stack.Screen name="batch" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+              <Stack.Screen name="shipments/[id]" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="skus" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="addresses" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="ship-now" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="wallet/topup" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+              <Stack.Screen name="wallet/cards" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/personal-details" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/security" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/notifications" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/help" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/appearance" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+              <Stack.Screen name="profile/about" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+            </Stack>
+          </ToastProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }

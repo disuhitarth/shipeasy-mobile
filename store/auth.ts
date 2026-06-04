@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import api from '@/lib/api';
+import { router } from 'expo-router';
+import api, { setUnauthorizedHandler } from '@/lib/api';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -15,6 +16,25 @@ interface AuthState {
   enableGuest: () => void;
   loadToken: () => Promise<void>;
 }
+
+let queryClientRef: { clear: () => void } | null = null;
+
+export function setQueryClientRef(client: { clear: () => void }) {
+  queryClientRef = client;
+}
+
+async function handleUnauthorized() {
+  await removeToken();
+  useAuth.setState({ user: null, isAuthenticated: false, isGuest: false });
+  if (queryClientRef) {
+    try { queryClientRef.clear(); } catch {}
+  }
+  try {
+    router.replace('/auth/login');
+  } catch {}
+}
+
+setUnauthorizedHandler(handleUnauthorized);
 
 // SecureStore isn't available on web, provide fallback
 async function getToken(): Promise<string | null> {
@@ -53,7 +73,6 @@ export const useAuth = create<AuthState>((set) => ({
 
   register: async (name: string, email: string, password: string) => {
     await api.post('/auth/register', { name, email, password });
-    // Log in immediately after registration
     const res = await api.post('/auth/mobile-login', { email, password });
     const { token, user } = res.data;
     await setToken(token);
@@ -75,7 +94,6 @@ export const useAuth = create<AuthState>((set) => ({
       if (!token) {
         return set({ isLoading: false, isGuest: true });
       }
-      // Verify token and load user
       const res = await api.get('/auth/me');
       set({
         user: res.data.user,
@@ -84,7 +102,6 @@ export const useAuth = create<AuthState>((set) => ({
         isGuest: false,
       });
     } catch {
-      // Token expired or invalid
       await removeToken();
       set({ isLoading: false, isGuest: true });
     }
