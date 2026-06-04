@@ -1,12 +1,16 @@
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useState, useCallback } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useState, useCallback, useRef } from 'react';
 import { useParseBatch, useGetRates, useCreateShipment } from '@/lib/queries';
 import { useWallet } from '@/store/wallet';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { colors, spacing, borderRadius } from '@/lib/theme';
 import type { AIParsedAddress } from '@/types';
 
-type Step = 'input' | 'review' | 'rates' | 'done';
+type Step = 'input' | 'parsing' | 'review' | 'rates' | 'done';
 
 interface AddressState extends AIParsedAddress {
   rateId?: string;
@@ -22,6 +26,8 @@ export default function BatchScreen() {
   const [addresses, setAddresses] = useState<AddressState[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
   const [parsing, setParsing] = useState(false);
+  const [reveal, setReveal] = useState(0);
+  const [buying, setBuying] = useState(false);
   const [results, setResults] = useState<{ success: number; failed: number; total: number } | null>(null);
 
   const balance = useWallet((s) => s.balance);
@@ -30,36 +36,47 @@ export default function BatchScreen() {
   const getRates = useGetRates();
   const createShipment = useCreateShipment();
 
+  const scrollRef = useRef<ScrollView>(null);
+
+  const total = addresses.reduce((s, a) => s + (a.ratePrice || 0), 0);
+  const canAfford = balance >= total;
+
   const doParse = useCallback(async () => {
     if (!text.trim()) return;
     setParsing(true);
+    setStep('parsing');
+    setReveal(0);
     try {
       const data = await parseBatch.mutateAsync(text);
-      setAddresses(data.addresses.map((a: AIParsedAddress) => ({
+      const parsed = data.addresses.map((a: AIParsedAddress) => ({
         ...a,
         weight: a.weight || 1,
         weight_unit: a.weight_unit || 'lb',
-      })));
-      setNotes(data.processing_notes || []);
-      setStep('review');
+      }));
+      parsed.forEach((_: any, i: number) => {
+        setTimeout(() => setReveal(i + 1), 350 + i * 280);
+      });
+      setTimeout(() => {
+        setAddresses(parsed);
+        setNotes(data.processing_notes || []);
+        setStep('review');
+      }, 350 + parsed.length * 280 + 200);
     } catch {
-      // fallback: mock 2 sample addresses for demo
-      setAddresses([
-        {
-          name: 'John Smith', address1: '123 Main St', city: 'Toronto',
-          province_code: 'ON', postal_code: 'M5T2C9', country_code: 'CA',
-          confidence: 95, warnings: [], original_text: 'John Smith, 123 Main St, Toronto ON M5T2C9',
-          weight: 1, weight_unit: 'lb',
-        },
-        {
-          name: 'Jane Doe', address1: '456 Queen St W', city: 'Vancouver',
-          province_code: 'BC', postal_code: 'V6Z1R8', country_code: 'CA',
-          confidence: 92, warnings: [], original_text: 'Jane Doe, 456 Queen St W, Vancouver BC V6Z1R8',
-          weight: 2.5, weight_unit: 'lb',
-        },
-      ]);
-      setNotes(['Demo mode — showing sample addresses']);
-      setStep('review');
+      const fallback = [
+        { name: 'Priya Sharma', address1: '1450 Howe St', city: 'Vancouver', province_code: 'BC', postal_code: 'V6Z 1R8', country_code: 'CA', confidence: 95, warnings: [], original_text: 'Priya Sharma, 1450 Howe St, Vancouver BC V6Z 1R8', weight: 1, weight_unit: 'lb' },
+        { name: 'Léa Tremblay', address1: '4200 Rue Saint-Denis', city: 'Montréal', province_code: 'QC', postal_code: 'H2J 2L1', country_code: 'CA', confidence: 92, warnings: [], original_text: 'Léa Tremblay, 4200 Rue Saint-Denis, Montréal QC H2J 2L1', weight: 2.5, weight_unit: 'lb' },
+        { name: 'Tom Becker', address1: '815 1 St SW', city: 'Calgary', province_code: 'AB', postal_code: 'T2P 1N3', country_code: 'CA', confidence: 90, warnings: [], original_text: 'Tom Becker, 815 1 St SW, Calgary AB T2P 1N3', weight: 1.5, weight_unit: 'lb' },
+        { name: 'Grace Liu', address1: '1741 Lower Water St', city: 'Halifax', province_code: 'NS', postal_code: 'B3J 1S5', country_code: 'CA', confidence: 94, warnings: [], original_text: 'Grace Liu, 1741 Lower Water St, Halifax NS B3J 1S5', weight: 2, weight_unit: 'lb' },
+        { name: "Daniel O'Connor", address1: '90 Eglinton Ave E', city: 'Toronto', province_code: 'ON', postal_code: 'M4P 2Y3', country_code: 'CA', confidence: 96, warnings: [], original_text: "Daniel O'Connor, 90 Eglinton Ave E, Toronto ON M4P 2Y3", weight: 1, weight_unit: 'lb' },
+      ];
+      fallback.forEach((_: any, i: number) => {
+        setTimeout(() => setReveal(i + 1), 350 + i * 280);
+      });
+      setTimeout(() => {
+        setAddresses(fallback);
+        setNotes(['Demo mode — showing sample addresses']);
+        setStep('review');
+      }, 350 + fallback.length * 280 + 200);
     } finally {
       setParsing(false);
     }
@@ -85,14 +102,16 @@ export default function BatchScreen() {
     setAddresses((prev) => prev.map((a, i) => {
       const r = results[i];
       if (r.status === 'fulfilled') {
-        const eco = r.value.rates.find((rt) => rt.id === 'ECO');
+        const eco = r.value.rates.find((rt: any) => rt.id === 'ECO');
         return { ...a, loadingRate: false, rateId: eco?.id, ratePrice: eco?.totalPrice, rateName: eco?.name, error: undefined };
       }
       return { ...a, loadingRate: false, error: 'Rate lookup failed' };
     }));
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
   }, [addresses, getRates]);
 
   const buyAll = useCallback(async () => {
+    setBuying(true);
     let success = 0;
     for (const a of addresses) {
       if (!a.rateId) continue;
@@ -117,6 +136,7 @@ export default function BatchScreen() {
     }
     setResults({ success, failed: addresses.length - success, total: addresses.length });
     setStep('done');
+    setBuying(false);
   }, [addresses, createShipment, deduct]);
 
   const removeAddress = useCallback((i: number) => {
@@ -128,26 +148,26 @@ export default function BatchScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/(tabs)')}>
-            <Ionicons name="close" size={18} color="#0B0B12" />
+            <Ionicons name="close" size={18} color={colors.ink} />
           </TouchableOpacity>
           <View style={styles.headerCenter}>
-            <Ionicons name="checkmark-circle" size={18} color="#34C759" />
+            <Ionicons name="checkmark-circle" size={18} color={colors.green} />
             <Text style={styles.headerTitle}>Batch complete</Text>
           </View>
           <View style={{ width: 40 }} />
         </View>
-        <View style={styles.doneCard}>
-          <Ionicons name="checkmark-circle" size={64} color="#34C759" />
-          <Text style={styles.doneTitle}>All done!</Text>
-          <Text style={styles.doneSub}>
-            {results.success} of {results.total} labels purchased
-          </Text>
+        <View style={styles.doneWrap}>
+          <LinearGradient colors={[colors.greenSoft, 'transparent']} style={styles.successRing}>
+            <Ionicons name="checkmark-circle" size={80} color={colors.green} />
+          </LinearGradient>
+          <Text style={styles.doneTitle}>{results.success} of {results.total} labels purchased</Text>
+          <Text style={styles.doneSub}>Charged ${total.toFixed(2)} from your wallet</Text>
           {results.failed > 0 && (
-            <Text style={styles.doneFail}>{results.failed} failed</Text>
+            <Text style={styles.doneFail}>{results.failed} label{results.failed !== 1 ? 's' : ''} failed</Text>
           )}
-          <TouchableOpacity style={styles.doneBtn} onPress={() => router.replace('/(tabs)/shipments')}>
-            <Text style={styles.doneBtnText}>View shipments</Text>
-          </TouchableOpacity>
+          <Button onPress={() => router.replace('/(tabs)/shipments')} style={{ marginTop: spacing['2xl'] }}>
+            View shipments
+          </Button>
         </View>
       </View>
     );
@@ -155,93 +175,140 @@ export default function BatchScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={20} color="#0B0B12" />
+          <Ionicons name="chevron-back" size={20} color={colors.ink} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Ionicons name="sparkles" size={16} color="#635BFF" />
+          <Ionicons name="sparkles" size={16} color={colors.accent} />
           <Text style={styles.headerTitle}>Magic Batch</Text>
         </View>
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Progress */}
       <View style={styles.progress}>
-        <View style={[styles.seg, step !== 'input' && styles.segDone]} />
+        <View style={[styles.seg, step !== 'input' && step !== 'parsing' && styles.segDone]} />
         <View style={[styles.seg, step === 'rates' && styles.segDone]} />
         <View style={[styles.seg, step === 'rates' && styles.segActive]} />
       </View>
 
       {step === 'input' && (
         <>
-          {/* Hero */}
           <View style={styles.hero}>
-            <Text style={styles.heroTitle}>Paste everything in</Text>
+            <Text style={styles.heroTitle}>Paste & go</Text>
             <Text style={styles.heroSub}>
-              Addresses, products, quantities — AI parses it all
+              Drop in messy text — AI sorts every address into ready-to-ship rows.
             </Text>
           </View>
 
-          {/* Textarea */}
-          <ScrollView style={styles.inputArea} keyboardShouldPersistTaps="handled">
+          <ScrollView style={styles.inputArea} keyboardShouldPersistTaps="handled" ref={scrollRef}>
             <TextInput
               style={styles.textarea}
               multiline
-              placeholder="Paste addresses here…&#10;&#10;e.g.&#10;John Smith&#10;123 Main St&#10;Toronto ON M5T2C9&#10;1× T-shirt"
-              placeholderTextColor="#9A9AA4"
+              placeholderTextColor={colors.faint}
               value={text}
               onChangeText={setText}
               textAlignVertical="top"
+              placeholder="e.g.
+              Priya — 1450 Howe St, Vancouver BC
+              Tom / 815 1 St SW, Calgary AB …"
             />
+            <View style={styles.inputActions}>
+              <TouchableOpacity style={styles.ghostLink} onPress={() => setText('Priya Sharma — 1450 Howe St, Vancouver BC V6Z 1R8\nLéa Tremblay — 4200 Rue Saint-Denis, Montréal QC H2J 2L1\nTom Becker — 815 1 St SW, Calgary AB T2P 1N3\nGrace Liu — 1741 Lower Water St, Halifax NS B3J 1S5\nDaniel O\'Connor — 90 Eglinton Ave E, Toronto ON M4P 2Y3')}>
+                <Ionicons name="copy-outline" size={15} color={colors.accent} />
+                <Text style={styles.ghostLinkText}>Paste sample</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.visionBtn}>
+                <Ionicons name="scan" size={17} color={colors.accent} />
+                <Text style={styles.visionBtnText}>AI Vision</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
 
-          {/* Footer */}
           <View style={styles.footer}>
             <View style={styles.hintRow}>
-              <Ionicons name="sparkles" size={14} color="#9A9AA4" />
+              <Ionicons name="sparkles" size={14} color={colors.accent} />
               <Text style={styles.hint}>AI-powered address parsing</Text>
             </View>
-            <TouchableOpacity
-              style={[styles.cta, !text.trim() && styles.ctaDisabled]}
-              onPress={doParse}
+            <Button
+              full
               disabled={!text.trim() || parsing}
+              loading={parsing}
+              onPress={doParse}
             >
-              {parsing ? (
-                <ActivityIndicator size="small" color="#fff" />
+              Parse with AI
+            </Button>
+          </View>
+        </>
+      )}
+
+      {step === 'parsing' && (
+        <>
+          <View style={styles.parsingHead}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.parsingText}>AI parsing addresses…</Text>
+          </View>
+          <ScrollView style={styles.addrList} contentContainerStyle={styles.addrListInner}>
+            {addresses.slice(0, Math.max(reveal, 5)).map((a, i) => (
+              i < reveal ? (
+                <View key={i} style={styles.parsedRow}>
+                  <View style={styles.batchNum}>
+                    <Text style={styles.batchNumText}>{i + 1}</Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.parsedName}>{a.name}</Text>
+                    <Text style={styles.parsedLine} numberOfLines={1}>{a.address1}, {a.city} {a.province_code}</Text>
+                  </View>
+                  <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+                </View>
               ) : (
-                <Text style={styles.ctaText}>Parse addresses</Text>
-              )}
-            </TouchableOpacity>
+                <View key={i} style={styles.parsedRow}>
+                  <View style={[styles.batchNum, { backgroundColor: colors.surface2 }]} />
+                  <View style={{ flex: 1, gap: 6 }}>
+                    <View style={styles.skelLine} />
+                    <View style={[styles.skelLine, { width: '70%' }]} />
+                  </View>
+                </View>
+              )
+            ))}
+          </ScrollView>
+          <View style={styles.footer}>
+            <Button full disabled loading>
+              Parsing addresses…
+            </Button>
           </View>
         </>
       )}
 
       {(step === 'review' || step === 'rates') && (
         <>
-          {/* Batch Summary */}
           <View style={styles.batchSummary}>
-            <Text style={styles.batchCount}>
-              {addresses.length} address{addresses.length !== 1 ? 'es' : ''} detected
-            </Text>
+            <View style={styles.batchSummaryRow}>
+              <View>
+                <Text style={styles.batchCount}>{addresses.length} shipment{addresses.length !== 1 ? 's' : ''}</Text>
+                <Text style={styles.batchStatus}>{step === 'rates' ? 'Rated · tax included' : 'Parsed & verified'}</Text>
+              </View>
+              <View style={styles.parsedPill}>
+                <Ionicons name="checkmark-circle" size={13} color={colors.green} />
+                <Text style={styles.parsedPillText}>AI verified</Text>
+              </View>
+            </View>
             {notes.map((n, i) => (
               <View key={i} style={styles.noteRow}>
-                <Ionicons name="information-circle" size={14} color="#635BFF" />
+                <Ionicons name="information-circle" size={14} color={colors.accent} />
                 <Text style={styles.noteText}>{n}</Text>
               </View>
             ))}
           </View>
 
-          {/* Address List */}
-          <ScrollView style={styles.addrList} contentContainerStyle={styles.addrListInner}>
+          <ScrollView style={styles.addrList} contentContainerStyle={styles.addrListInner} ref={scrollRef}>
             {addresses.map((a, i) => (
-              <View key={i} style={styles.addrCard}>
+              <Card key={i} padding={16} style={{ gap: 10 }}>
                 <View style={styles.addrCardHeader}>
-                  <View style={styles.addrBadge}>
-                    <Text style={styles.addrBadgeText}>{i + 1}</Text>
+                  <View style={styles.batchNum}>
+                    <Text style={styles.batchNumText}>{i + 1}</Text>
                   </View>
-                  <View style={styles.addrCardInfo}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={styles.addrName}>{a.name}</Text>
                     <Text style={styles.addrLine}>
                       {a.address1}{a.address2 ? `, ${a.address2}` : ''}
@@ -251,43 +318,45 @@ export default function BatchScreen() {
                     </Text>
                   </View>
                   <TouchableOpacity onPress={() => removeAddress(i)} style={styles.removeBtn}>
-                    <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                    <Ionicons name="close-circle" size={20} color={colors.red} />
                   </TouchableOpacity>
                 </View>
 
-                {/* Weight */}
                 <View style={styles.addrMeta}>
-                  <Ionicons name="cube-outline" size={14} color="#9A9AA4" />
+                  <Ionicons name="cube-outline" size={14} color={colors.faint} />
                   <Text style={styles.addrMetaText}>
                     {a.weight || 1} {a.weight_unit || 'lb'}
                   </Text>
                   {a.detected_product && (
                     <>
-                      <Ionicons name="pricetag-outline" size={14} color="#9A9AA4" />
+                      <View style={styles.metaDot} />
+                      <Ionicons name="pricetag-outline" size={14} color={colors.faint} />
                       <Text style={styles.addrMetaText}>{a.detected_product}</Text>
                     </>
                   )}
                   {a.detected_quantity && (
                     <>
-                      <Ionicons name="layers-outline" size={14} color="#9A9AA4" />
+                      <View style={styles.metaDot} />
+                      <Ionicons name="layers-outline" size={14} color={colors.faint} />
                       <Text style={styles.addrMetaText}>×{a.detected_quantity}</Text>
                     </>
                   )}
                 </View>
 
-                {/* Confidence */}
                 <View style={styles.confRow}>
                   <View style={styles.confBar}>
                     <View style={[styles.confFill, { width: `${a.confidence}%` }]} />
                   </View>
-                  <Text style={styles.confText}>{a.confidence}% confidence</Text>
+                  <Text style={styles.confText}>{a.confidence}%</Text>
                 </View>
 
-                {/* Rate / Error */}
                 {step === 'rates' && (
                   <View style={styles.rateRow}>
                     {a.loadingRate ? (
-                      <ActivityIndicator size="small" color="#635BFF" />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <ActivityIndicator size="small" color={colors.accent} />
+                        <Text style={{ fontSize: 13, color: colors.faint }}>Getting rates…</Text>
+                      </View>
                     ) : a.error ? (
                       <Text style={styles.rateError}>{a.error}</Text>
                     ) : a.ratePrice ? (
@@ -295,47 +364,37 @@ export default function BatchScreen() {
                         {a.rateName}: <Text style={styles.ratePrice}>${a.ratePrice.toFixed(2)}</Text>
                       </Text>
                     ) : (
-                      <Text style={styles.ratePending}>Awaiting rates…</Text>
+                      <Text style={{ fontSize: 13, color: colors.faint }}>Awaiting rates…</Text>
                     )}
                   </View>
                 )}
-              </View>
+              </Card>
             ))}
           </ScrollView>
 
-          {/* Footer */}
-          {step === 'review' && (
-            <View style={styles.footer}>
-              <TouchableOpacity
-                style={styles.cta}
-                onPress={rateAll}
-              >
-                <Text style={styles.ctaText}>Get rates for all</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {step === 'rates' && (
-            <View style={styles.footer}>
-              <View style={styles.footTotal}>
-                <Text style={styles.footTotalLabel}>Estimated total</Text>
-                <Text style={styles.footTotalValue}>
-                  ${addresses.reduce((s, a) => s + (a.ratePrice || 0), 0).toFixed(2)}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.cta, balance < addresses.reduce((s, a) => s + (a.ratePrice || 0), 0) && styles.ctaDisabled]}
-                onPress={buyAll}
-                disabled={balance < addresses.reduce((s, a) => s + (a.ratePrice || 0), 0)}
-              >
-                <Text style={styles.ctaText}>
-                  {balance < addresses.reduce((s, a) => s + (a.ratePrice || 0), 0)
-                    ? 'Insufficient balance'
-                    : `Buy ${addresses.length} label${addresses.length !== 1 ? 's' : ''}`}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          <View style={styles.footer}>
+            {step === 'review' && (
+              <Button full onPress={rateAll}>
+                {'Get rates for all ' + addresses.length}
+              </Button>
+            )}
+            {step === 'rates' && (
+              <>
+                <View style={styles.footTotal}>
+                  <Text style={styles.footTotalLabel}>{addresses.length} label{addresses.length !== 1 ? 's' : ''} · incl. tax</Text>
+                  <Text style={styles.footTotalValue}>${total.toFixed(2)}</Text>
+                </View>
+                <Button
+                  full
+                  disabled={!canAfford}
+                  loading={buying}
+                  onPress={buyAll}
+                >
+                  {canAfford ? 'Pay & generate' : 'Insufficient balance'}
+                </Button>
+              </>
+            )}
+          </View>
         </>
       )}
     </View>
@@ -343,96 +402,119 @@ export default function BatchScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F5' },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: 16, paddingTop: 60,
+    padding: spacing.lg, paddingTop: 60,
   },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  backBtn: { width: 40, height: 40, borderRadius: borderRadius.full, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  headerTitle: { fontSize: 17, fontWeight: '600' },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: colors.ink },
 
-  // Progress
-  progress: { flexDirection: 'row', gap: 6, paddingHorizontal: 20, marginBottom: 8 },
-  seg: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,20,0.07)' },
-  segDone: { backgroundColor: '#635BFF' },
-  segActive: { backgroundColor: '#635BFF', opacity: 0.5 },
+  progress: { flexDirection: 'row', gap: 6, paddingHorizontal: spacing.xl, marginBottom: spacing.sm },
+  seg: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.hairline },
+  segDone: { backgroundColor: colors.accent },
+  segActive: { backgroundColor: colors.accent, opacity: 0.5 },
 
-  // Input step
-  hero: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
-  heroTitle: { fontSize: 27, fontWeight: '700', letterSpacing: -0.6 },
-  heroSub: { fontSize: 14.5, color: '#6B6B76', marginTop: 4 },
-  inputArea: { flex: 1, paddingHorizontal: 20 },
+  hero: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.lg },
+  heroTitle: { fontSize: 27, fontWeight: '700', letterSpacing: -0.6, color: colors.ink },
+  heroSub: { fontSize: 14.5, color: colors.muted, marginTop: spacing.xs },
+
+  inputArea: { flex: 1, paddingHorizontal: spacing.xl },
   textarea: {
-    flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 16,
-    fontSize: 15, lineHeight: 22, color: '#0B0B12',
-    borderWidth: 1, borderColor: 'rgba(10,10,20,0.07)',
+    flex: 1, backgroundColor: colors.surface, borderRadius: borderRadius.sm, padding: spacing.lg,
+    fontSize: 15, lineHeight: 22, color: colors.ink,
+    borderWidth: 1, borderColor: colors.hairline,
+    fontFamily: 'ui-monospace',
   },
+  inputActions: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    marginTop: spacing.md, marginBottom: spacing.xs,
+  },
+  ghostLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 12 },
+  ghostLinkText: { fontSize: 14, fontWeight: '600', color: colors.accent },
+  visionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 14,
+    backgroundColor: colors.accentSoft, borderRadius: borderRadius.full,
+  },
+  visionBtnText: { fontSize: 14, fontWeight: '600', color: colors.accent },
 
-  // Footer
   footer: {
-    padding: 20, paddingBottom: 40,
-    borderTopWidth: 1, borderTopColor: 'rgba(10,10,20,0.07)',
-    backgroundColor: 'rgba(242,242,245,0.95)',
-    flexDirection: 'row', alignItems: 'center', gap: 16,
+    padding: spacing.xl, paddingBottom: 40,
+    borderTopWidth: 1, borderTopColor: colors.hairline,
+    backgroundColor: colors.bg,
+    gap: spacing.md,
   },
-  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, position: 'absolute', top: -30, left: 20 },
-  hint: { fontSize: 12, color: '#9A9AA4' },
-  cta: {
-    flex: 1, height: 52, borderRadius: 14, backgroundColor: '#635BFF',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  ctaDisabled: { opacity: 0.42 },
-  ctaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'center' },
+  hint: { fontSize: 12, color: colors.faint },
 
-  // Review / Rates step
-  batchSummary: { paddingHorizontal: 20, paddingVertical: 12 },
-  batchCount: { fontSize: 14, fontWeight: '600', color: '#6B6B76' },
-  noteRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
-  noteText: { fontSize: 12.5, color: '#635BFF', flex: 1 },
-  addrList: { flex: 1 },
-  addrListInner: { padding: 20, gap: 12, paddingBottom: 40 },
-  addrCard: {
-    backgroundColor: '#fff', borderRadius: 14, padding: 16,
-    borderWidth: 1, borderColor: 'rgba(10,10,20,0.07)',
+  parsingHead: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
   },
-  addrCardHeader: { flexDirection: 'row', gap: 12 },
-  addrBadge: {
-    width: 28, height: 28, borderRadius: 14, backgroundColor: '#ECEBFF',
+  parsingText: { fontSize: 14.5, fontWeight: '600', color: colors.ink },
+
+  batchSummary: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md },
+  batchSummaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  batchCount: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4, color: colors.ink },
+  batchStatus: { fontSize: 12.5, color: colors.faint, marginTop: 2 },
+  parsedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.greenSoft, paddingVertical: 5, paddingHorizontal: 12,
+    borderRadius: borderRadius.full,
+  },
+  parsedPillText: { fontSize: 12.5, fontWeight: '600', color: colors.green },
+  noteRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  noteText: { fontSize: 12.5, color: colors.accent, flex: 1 },
+
+  addrList: { flex: 1 },
+  addrListInner: { padding: spacing.xl, gap: spacing.md, paddingBottom: 40 },
+
+  parsedRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: colors.surface, borderRadius: borderRadius.sm, padding: spacing.lg,
+    borderWidth: 1, borderColor: colors.hairline,
+  },
+  parsedName: { fontSize: 14.5, fontWeight: '600', color: colors.ink },
+  parsedLine: { fontSize: 12.5, color: colors.faint, marginTop: 1 },
+
+  batchNum: {
+    width: 28, height: 28, borderRadius: 14, backgroundColor: colors.accentSoft,
     alignItems: 'center', justifyContent: 'center',
   },
-  addrBadgeText: { fontSize: 13, fontWeight: '700', color: '#635BFF' },
-  addrCardInfo: { flex: 1 },
-  addrName: { fontSize: 15, fontWeight: '600', color: '#0B0B12' },
-  addrLine: { fontSize: 13.5, color: '#6B6B76', marginTop: 1 },
+  batchNumText: { fontSize: 13, fontWeight: '700', color: colors.accent },
+
+  skelLine: { height: 12, borderRadius: 6, backgroundColor: colors.surface2 },
+
+  addrCardHeader: { flexDirection: 'row', gap: 12 },
+  addrName: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  addrLine: { fontSize: 13.5, color: colors.muted, marginTop: 1 },
   removeBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+
   addrMeta: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(10,10,20,0.05)',
+    paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.hairline,
   },
-  addrMetaText: { fontSize: 12.5, color: '#6B6B76' },
-  confRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  confBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,20,0.07)' },
-  confFill: { height: 4, borderRadius: 2, backgroundColor: '#34C759' },
-  confText: { fontSize: 11, color: '#9A9AA4', fontWeight: '500', width: 80, textAlign: 'right' },
+  metaDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: colors.hairline },
+  addrMetaText: { fontSize: 12.5, color: colors.muted },
 
-  // Rate
-  rateRow: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(10,10,20,0.05)', alignItems: 'center', minHeight: 32 },
-  rateError: { fontSize: 13, color: '#FF3B30' },
-  rateValue: { fontSize: 14, fontWeight: '500', color: '#0B0B12' },
-  ratePrice: { fontWeight: '700', color: '#635BFF' },
-  ratePending: { fontSize: 13, color: '#9A9AA4' },
+  confRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  confBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.hairline },
+  confFill: { height: 4, borderRadius: 2, backgroundColor: colors.green },
+  confText: { fontSize: 11, color: colors.faint, fontWeight: '500', width: 36, textAlign: 'right' },
 
-  // Footer total
-  footTotal: { alignItems: 'flex-end' },
-  footTotalLabel: { fontSize: 12.5, fontWeight: '600', color: '#9A9AA4' },
-  footTotalValue: { fontSize: 22, fontWeight: '700', letterSpacing: -0.5, color: '#0B0B12' },
+  rateRow: { paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.hairline, minHeight: 32 },
+  rateError: { fontSize: 13, color: colors.red },
+  rateValue: { fontSize: 14, fontWeight: '500', color: colors.ink },
+  ratePrice: { fontWeight: '700', color: colors.accent },
 
-  // Done screen
-  doneCard: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 },
-  doneTitle: { fontSize: 24, fontWeight: '700' },
-  doneSub: { fontSize: 16, color: '#6B6B76' },
-  doneFail: { fontSize: 14, color: '#FF3B30' },
-  doneBtn: { marginTop: 24, height: 52, paddingHorizontal: 40, borderRadius: 14, backgroundColor: '#635BFF', alignItems: 'center', justifyContent: 'center' },
-  doneBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  footTotal: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },
+  footTotalLabel: { fontSize: 12.5, fontWeight: '600', color: colors.faint },
+  footTotalValue: { fontSize: 22, fontWeight: '700', letterSpacing: -0.5, color: colors.ink },
+
+  doneWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  successRing: { marginBottom: spacing.lg },
+  doneTitle: { fontSize: 26, fontWeight: '700', letterSpacing: -0.4, color: colors.ink, textAlign: 'center' },
+  doneSub: { fontSize: 15, color: colors.muted, marginTop: spacing.sm, textAlign: 'center' },
+  doneFail: { fontSize: 14, color: colors.red, marginTop: spacing.xs, textAlign: 'center' },
 });

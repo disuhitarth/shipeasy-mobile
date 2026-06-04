@@ -1,34 +1,47 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Animated, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useShipment, useTracking, useVoidShipment } from '@/lib/queries';
 import api from '@/lib/api';
+import { Badge } from '@/components/ui/Badge';
+import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
+import { colors, spacing, borderRadius, shadows } from '@/lib/theme';
 import type { TrackingEvent } from '@/types';
-
-const STATUS_COLORS: Record<string, string> = {
-  'label-created': '#635BFF',
-  'picked-up': '#FF9500',
-  'in-transit': '#007AFF',
-  'out-for-delivery': '#FF9500',
-  delivered: '#34C759',
-  voided: '#FF3B30',
-  failed: '#FF3B30',
-};
 
 const CAN_VOID = ['label-created', 'pending'];
 
+function PulseTag() {
+  const opacity = useRef(new Animated.Value(1));
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity.current, { toValue: 0.35, duration: 900, useNativeDriver: true }),
+        Animated.timing(opacity.current, { toValue: 1, duration: 900, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  return (
+    <Animated.Text style={[styles.pulseTag, { opacity: opacity.current }]}>
+      IN TRANSIT
+    </Animated.Text>
+  );
+}
+
 export default function ShipmentDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data: shipment, isLoading } = useShipment(id);
+  const { data: shipment, isLoading, isError, refetch } = useShipment(id);
   const { data: tracking, isLoading: trackLoading } = useTracking(id);
   const voidShipment = useVoidShipment();
   const [sharing, setSharing] = useState(false);
 
   const events: TrackingEvent[] = tracking?.events ?? tracking ?? [];
-  const color = STATUS_COLORS[shipment?.status || ''] || '#9A9AA4';
+  const isDelivered = shipment?.status === 'delivered';
+  const isInTransit = !isDelivered && !['voided', 'failed', 'pending'].includes(shipment?.status || '');
 
   const openLabel = async () => {
     setSharing(true);
@@ -71,86 +84,97 @@ export default function ShipmentDetailScreen() {
     );
   };
 
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return `${d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' })}`;
+  };
+
+  const formatEstDelivery = () => {
+    if (events.length > 0) {
+      const d = new Date(events[events.length - 1].date);
+      return d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+    return '2\u20135 business days';
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={20} color="#0B0B12" />
+          <Ionicons name="chevron-back" size={20} color={colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>N° {id}</Text>
+        <Text style={styles.headerTitle}>Shipment</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInner}>
         {isLoading ? (
-          <ActivityIndicator size="large" color="#635BFF" style={{ marginTop: 60 }} />
-        ) : shipment ? (
+          <View style={styles.loadingWrap}>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </View>
+        ) : isError ? (
+          <View style={styles.errorWrap}>
+            <Ionicons name="cloud-offline-outline" size={48} color={colors.faint} />
+            <Text style={styles.errorText}>Could not load shipment</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : !shipment ? (
+          <View style={styles.errorWrap}>
+            <Ionicons name="document-outline" size={48} color={colors.faint} />
+            <Text style={styles.errorText}>Shipment not found</Text>
+          </View>
+        ) : (
           <>
-            {/* Hero Card */}
             <View style={styles.heroCard}>
-              <View style={styles.heroRow}>
-                <View style={styles.pkgIcon}>
-                  <Ionicons name="cube" size={25} color="#635BFF" />
-                </View>
-                <View style={styles.heroInfo}>
-                  <Text style={styles.heroItem}>
-                    {shipment.items?.[0]?.description || 'Parcel'}
-                  </Text>
-                  <Text style={styles.heroMeta}>
-                    {shipment.service || shipment.postageType || 'Standard'} · {shipment.weight}{shipment.weightUnit}
-                  </Text>
-                </View>
-                <View style={[styles.badge, { backgroundColor: color + '20' }]}>
-                  <View style={[styles.badgeDot, { backgroundColor: color }]} />
-                  <Text style={[styles.badgeText, { color }]}>{shipment.status}</Text>
-                </View>
-              </View>
               <View style={styles.route}>
-                <View>
-                  <Text style={styles.routeLabel}>FROM</Text>
+                <View style={styles.routeEnd}>
+                  <Text style={styles.routeLbl}>FROM</Text>
                   <Text style={styles.routeCity}>Toronto</Text>
+                  <Text style={styles.routeProvince}>ON</Text>
                 </View>
-                <View style={styles.routeLine}>
+                <View style={styles.routeLineWrap}>
+                  <View style={styles.routeLine} />
                   <View style={styles.routeTruck}>
-                    <Ionicons name="car" size={14} color="#fff" />
+                    <Ionicons name="car" size={13} color={colors.white} />
                   </View>
                 </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.routeLabel}>TO</Text>
+                <View style={[styles.routeEnd, { alignItems: 'flex-end' }]}>
+                  <Text style={styles.routeLbl}>TO</Text>
                   <Text style={styles.routeCity}>{shipment.recipientCity}</Text>
+                  <Text style={styles.routeProvince}>{shipment.recipientProvinceCode}</Text>
                 </View>
               </View>
-            </View>
 
-            {/* Action buttons */}
-            <View style={styles.actions}>
-              <TouchableOpacity style={styles.actionBtn} onPress={openLabel} disabled={sharing}>
-                {sharing ? (
-                  <ActivityIndicator size="small" color="#635BFF" />
-                ) : (
-                  <>
-                    <Ionicons name="document-text" size={18} color="#635BFF" />
-                    <Text style={styles.actionText}>View Label</Text>
-                  </>
+              <View style={styles.statusRow}>
+                <Badge status={shipment.status} />
+                {shipment.service && (
+                  <Text style={styles.serviceLabel}>{shipment.service}</Text>
                 )}
-              </TouchableOpacity>
-              {CAN_VOID.includes(shipment.status) && (
-                <TouchableOpacity style={styles.actionBtn} onPress={voidLabel} disabled={voidShipment.isPending}>
-                  {voidShipment.isPending ? (
-                    <ActivityIndicator size="small" color="#FF3B30" />
-                  ) : (
-                    <>
-                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
-                      <Text style={[styles.actionText, { color: '#FF3B30' }]}>Void</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+              </View>
+
+              {shipment.trackingCode && (
+                <View style={styles.trackRow}>
+                  <Ionicons name="barcode-outline" size={14} color={colors.faint} />
+                  <Text style={styles.trackValue}>{shipment.trackingCode}</Text>
+                </View>
               )}
             </View>
 
-            {/* Detail rows */}
-            <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Shipment Details</Text>
+            <View style={styles.etaBanner}>
+              <Ionicons name="calendar-outline" size={18} color={colors.accent} />
+              <View>
+                <Text style={styles.etaTitle}>Estimated delivery</Text>
+                <Text style={styles.etaSub}>{formatEstDelivery()}</Text>
+              </View>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Shipment Details</Text>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Recipient</Text>
                 <Text style={styles.detailValue}>{shipment.recipientName}</Text>
@@ -163,58 +187,116 @@ export default function ShipmentDetailScreen() {
                 </Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Tracking</Text>
-                <Text style={styles.detailValue}>{shipment.trackingCode || '—'}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Service</Text>
-                <Text style={styles.detailValue}>{shipment.service || shipment.postageType || '—'}</Text>
+                <Text style={styles.detailLabel}>Package</Text>
+                <Text style={styles.detailValue}>{shipment.packageType}</Text>
               </View>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Weight</Text>
                 <Text style={styles.detailValue}>{shipment.weight}{shipment.weightUnit}</Text>
               </View>
+              {(shipment.length || shipment.width || shipment.height) && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Dimensions</Text>
+                  <Text style={styles.detailValue}>
+                    {[shipment.length, shipment.width, shipment.height].filter(Boolean).join(' \u00D7 ')}
+                    {shipment.sizeUnit ? ` ${shipment.sizeUnit}` : ''}
+                  </Text>
+                </View>
+              )}
               <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Service</Text>
+                <Text style={styles.detailValue}>{shipment.service || shipment.postageType || '\u2014'}</Text>
+              </View>
+              {shipment.insured && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Insurance</Text>
+                  <Text style={styles.detailValue}>Included</Text>
+                </View>
+              )}
+              {shipment.signatureConfirmation && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Signature</Text>
+                  <Text style={styles.detailValue}>Required</Text>
+                </View>
+              )}
+              <View style={[styles.detailRow, styles.detailRowLast]}>
                 <Text style={styles.detailLabel}>Total charged</Text>
-                <Text style={styles.detailValue}>${shipment.customerTotal?.toFixed(2)}</Text>
+                <Text style={styles.detailTotal}>${shipment.customerTotal?.toFixed(2)}</Text>
               </View>
             </View>
 
-            {/* Tracking Timeline */}
-            <View style={styles.timelineCard}>
-              <Text style={styles.detailTitle}>Tracking</Text>
-              {trackLoading ? (
-                <ActivityIndicator size="small" color="#635BFF" />
-              ) : events.length > 0 ? (
-                <View>
+            {events.length > 0 && (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Tracking</Text>
+                <View style={styles.timeline}>
                   {events.map((ev, i) => {
                     const isLatest = i === 0;
+                    const isLast = i === events.length - 1;
                     return (
                       <View key={i} style={styles.tlRow}>
-                        <View style={styles.tlNodeCol}>
-                          <View style={[styles.tlNode, isLatest && { backgroundColor: color }]} />
-                          {i < events.length - 1 && <View style={styles.tlLine} />}
+                        <View style={styles.tlRail}>
+                          <View style={[styles.tlNode, isLatest && styles.tlNodeActive]} />
+                          {!isLast && <View style={[styles.tlLine, isLatest && styles.tlLineActive]} />}
                         </View>
-                        <View style={{ flex: 1, paddingBottom: i < events.length - 1 ? 16 : 0 }}>
-                          <Text style={[styles.tlText, !isLatest && styles.tlInactive]}>
+                        <View style={styles.tlBody}>
+                          <Text style={[styles.tlDesc, !isLatest && styles.tlInactive]}>
                             {ev.description || ev.status}
                           </Text>
                           <View style={styles.tlMeta}>
-                            {ev.date && <Text style={styles.tlSub}>{ev.date?.slice(0, 10)}</Text>}
-                            {ev.location && <Text style={styles.tlSub}>{ev.location}</Text>}
+                            {ev.location && (
+                              <View style={styles.tlLoc}>
+                                <Ionicons name="location-outline" size={11} color={colors.faint} />
+                                <Text style={styles.tlSub}>{ev.location}</Text>
+                              </View>
+                            )}
+                            {ev.date && <Text style={styles.tlSub}>{formatDate(ev.date)}</Text>}
                           </View>
+                          {isLatest && isInTransit && <PulseTag />}
                         </View>
                       </View>
                     );
                   })}
                 </View>
+              </View>
+            )}
+
+            <TouchableOpacity style={styles.labelRow} onPress={openLabel} disabled={sharing}>
+              <View style={styles.labelIcon}>
+                <Ionicons name="document-text" size={22} color={colors.accent} />
+              </View>
+              <View style={styles.labelInfo}>
+                <Text style={styles.labelTitle}>Shipping Label</Text>
+                <Text style={styles.labelSub}>PDF \u00B7 {shipment.labelFormat || '4\u00D76'}</Text>
+              </View>
+              {sharing ? (
+                <ActivityIndicator size="small" color={colors.accent} />
               ) : (
-                <Text style={styles.noTrack}>No tracking updates yet</Text>
+                <View style={styles.labelCta}>
+                  <Text style={styles.labelCtaText}>View</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+                </View>
               )}
-            </View>
+            </TouchableOpacity>
+
+            {CAN_VOID.includes(shipment.status) && (
+              <TouchableOpacity
+                style={styles.voidBtn}
+                onPress={voidLabel}
+                disabled={voidShipment.isPending}
+              >
+                {voidShipment.isPending ? (
+                  <ActivityIndicator size="small" color={colors.red} />
+                ) : (
+                  <>
+                    <Ionicons name="close-circle-outline" size={20} color={colors.red} />
+                    <Text style={styles.voidText}>Void label</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+
+            <View style={{ height: 40 }} />
           </>
-        ) : (
-          <Text style={styles.loading}>Shipment not found</Text>
         )}
       </ScrollView>
     </View>
@@ -222,57 +304,134 @@ export default function ShipmentDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F5' },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: 16, paddingTop: 60,
+    paddingHorizontal: spacing.lg, paddingTop: 60, paddingBottom: spacing.sm,
   },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600' },
-  content: { flex: 1 },
-  contentInner: { padding: 20, gap: 12 },
-  loading: { color: '#9A9AA4', fontSize: 14, textAlign: 'center', marginTop: 40 },
-
-  // Hero
-  heroCard: { backgroundColor: '#fff', borderRadius: 22, padding: 18 },
-  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  pkgIcon: { width: 50, height: 50, borderRadius: 15, backgroundColor: '#ECEBFF', alignItems: 'center', justifyContent: 'center' },
-  heroInfo: { flex: 1 },
-  heroItem: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
-  heroMeta: { fontSize: 13, color: '#9A9AA4', marginTop: 2 },
-  badge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 5, paddingHorizontal: 11, borderRadius: 100 },
-  badgeDot: { width: 6, height: 6, borderRadius: 3 },
-  badgeText: { fontSize: 12.5, fontWeight: '600' },
-  route: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(10,10,20,0.07)' },
-  routeLabel: { fontSize: 10.5, fontWeight: '600', letterSpacing: 0.5, color: '#9A9AA4' },
-  routeCity: { fontSize: 15, fontWeight: '600', marginTop: 2, letterSpacing: -0.2 },
-  routeLine: { flex: 1, height: 2, backgroundColor: 'rgba(10,10,20,0.07)', position: 'relative' },
-  routeTruck: { position: 'absolute', top: -7, left: '50%', marginLeft: -14, width: 28, height: 28, borderRadius: 14, backgroundColor: '#635BFF', alignItems: 'center', justifyContent: 'center' },
-
-  // Actions
-  actions: { flexDirection: 'row', gap: 10 },
-  actionBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, height: 48, borderRadius: 14, backgroundColor: '#fff', padding: 14,
+  backBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+    ...shadows.md,
   },
-  actionText: { fontSize: 14, fontWeight: '600', color: '#635BFF' },
+  headerTitle: { fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: colors.ink },
+  scroll: { flex: 1 },
+  scrollInner: { padding: spacing.xl, gap: spacing.md },
+  loadingWrap: { gap: spacing.md, marginTop: 20 },
+  errorWrap: { alignItems: 'center', justifyContent: 'center', paddingTop: 80, gap: 12 },
+  errorText: { fontSize: 15, color: colors.faint, fontWeight: '500' },
+  retryBtn: {
+    marginTop: 4, paddingVertical: 10, paddingHorizontal: 24,
+    borderRadius: borderRadius.sm, backgroundColor: colors.surface,
+    ...shadows.sm,
+  },
+  retryText: { fontSize: 14, fontWeight: '600', color: colors.accent },
 
-  // Details
-  detailCard: { backgroundColor: '#fff', borderRadius: 22, padding: 18 },
-  detailTitle: { fontSize: 18, fontWeight: '700', marginBottom: 14, letterSpacing: -0.3 },
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  detailLabel: { fontSize: 14, color: '#6B6B76' },
-  detailValue: { fontSize: 14, fontWeight: '600', color: '#0B0B12', flex: 1, textAlign: 'right' },
+  heroCard: {
+    backgroundColor: colors.surface, borderRadius: borderRadius.md,
+    padding: spacing.lg, ...shadows.md,
+  },
+  route: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  routeEnd: { flexShrink: 0 },
+  routeLbl: {
+    fontSize: 10.5, fontWeight: '600', letterSpacing: 0.5,
+    color: colors.faint, textTransform: 'uppercase',
+  },
+  routeCity: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3, marginTop: 2, color: colors.ink },
+  routeProvince: { fontSize: 13, color: colors.muted, marginTop: 1 },
+  routeLineWrap: { flex: 1, height: 2, position: 'relative', marginHorizontal: spacing.xs },
+  routeLine: {
+    height: 2, borderRadius: 1,
+    borderStyle: 'dashed', borderWidth: 1, borderColor: colors.hairline,
+    backgroundColor: 'transparent',
+  },
+  routeTruck: {
+    position: 'absolute', top: -13, left: '50%', marginLeft: -14,
+    width: 28, height: 28, borderRadius: 14, backgroundColor: colors.accent,
+    alignItems: 'center', justifyContent: 'center',
+    ...shadows.sm,
+  },
+  statusRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    marginTop: spacing.lg, paddingTop: spacing.lg,
+    borderTopWidth: 1, borderTopColor: colors.hairline,
+  },
+  serviceLabel: { fontSize: 13, color: colors.muted, fontWeight: '500' },
+  trackRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  trackValue: { fontSize: 13, fontWeight: '600', color: colors.muted, letterSpacing: 0.3 },
 
-  // Timeline
-  timelineCard: { backgroundColor: '#fff', borderRadius: 22, padding: 18 },
-  tlRow: { flexDirection: 'row', gap: 14 },
-  tlNodeCol: { alignItems: 'center', width: 12 },
-  tlNode: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#D1D1D6', marginTop: 3 },
-  tlLine: { width: 2, flex: 1, backgroundColor: '#E5E5EA', marginTop: 4 },
-  tlText: { fontSize: 14, fontWeight: '600', color: '#0B0B12' },
-  tlInactive: { color: '#9A9AA4' },
-  tlMeta: { flexDirection: 'row', gap: 10, marginTop: 2 },
-  tlSub: { fontSize: 12, color: '#9A9AA4' },
-  noTrack: { fontSize: 14, color: '#9A9AA4', textAlign: 'center' },
+  etaBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 11,
+    padding: spacing.lg, borderRadius: borderRadius.sm,
+    backgroundColor: colors.accentSoft,
+  },
+  etaTitle: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  etaSub: { fontSize: 12, color: colors.accent, opacity: 0.7, marginTop: 1 },
+
+  card: {
+    backgroundColor: colors.surface, borderRadius: borderRadius.md,
+    padding: spacing.lg, ...shadows.md,
+  },
+  cardTitle: {
+    fontSize: 18, fontWeight: '700', letterSpacing: -0.3,
+    marginBottom: spacing.lg, color: colors.ink,
+  },
+  detailRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1, borderBottomColor: colors.hairline2,
+  },
+  detailRowLast: { borderBottomWidth: 0, paddingTop: spacing.sm },
+  detailLabel: { fontSize: 14, color: colors.muted, flex: 1 },
+  detailValue: {
+    fontSize: 14, fontWeight: '600', color: colors.ink,
+    textAlign: 'right', maxWidth: '55%',
+  },
+  detailTotal: { fontSize: 16, fontWeight: '700', color: colors.ink, textAlign: 'right' },
+
+  timeline: { paddingLeft: 2 },
+  tlRow: { flexDirection: 'row', gap: 14, paddingBottom: 0 },
+  tlRail: { alignItems: 'center', width: 30, paddingTop: 2 },
+  tlNode: { width: 14, height: 14, borderRadius: 7, backgroundColor: colors.hairline },
+  tlNodeActive: { backgroundColor: colors.accent, width: 16, height: 16, borderRadius: 8 },
+  tlLine: { width: 2, flex: 1, backgroundColor: colors.hairline, marginVertical: 4, minHeight: 24 },
+  tlLineActive: { backgroundColor: colors.accent },
+  tlBody: { flex: 1, paddingBottom: 26 },
+  tlDesc: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  tlInactive: { color: colors.faint, fontWeight: '500' },
+  tlMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  tlLoc: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  tlSub: { fontSize: 12, color: colors.faint },
+  pulseTag: {
+    fontSize: 10.5, fontWeight: '700', letterSpacing: 0.5, marginTop: 6,
+    color: colors.accent, backgroundColor: colors.accentSoft,
+    paddingVertical: 2, paddingHorizontal: 8, borderRadius: 6,
+    overflow: 'hidden', alignSelf: 'flex-start',
+  },
+
+  labelRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 13,
+    padding: spacing.lg, borderRadius: borderRadius.md,
+    backgroundColor: colors.surface, ...shadows.md,
+  },
+  labelIcon: {
+    width: 44, height: 44, borderRadius: 13,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  labelInfo: { flex: 1 },
+  labelTitle: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  labelSub: { fontSize: 12.5, color: colors.faint, marginTop: 1 },
+  labelCta: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  labelCtaText: { fontSize: 14, fontWeight: '600', color: colors.accent },
+
+  voidBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    height: 50, borderRadius: borderRadius.sm,
+    backgroundColor: colors.surface, ...shadows.md,
+  },
+  voidText: { fontSize: 15, fontWeight: '600', color: colors.red },
 });

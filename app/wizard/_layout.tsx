@@ -16,6 +16,7 @@ import { SuccessScreen } from '@/components/wizard/SuccessScreen';
 import { SkuSheet } from '@/components/wizard/SkuSheet';
 import { DEFAULT_WIZARD, STEP_TITLES, STEP_SUBS } from '@/components/wizard/types';
 import type { WizardState } from '@/components/wizard/types';
+import { colors, spacing, borderRadius, typography, shadows } from '@/lib/theme';
 
 export default function WizardScreen() {
   const [step, setStep] = useState(0);
@@ -65,9 +66,14 @@ export default function WizardScreen() {
     });
   }, [patch]);
 
+  const getTotal = useCallback(() => {
+    if (!rates || !state.rateId) return 0;
+    const selected = rates.find(r => r.id === state.rateId);
+    return selected?.totalPrice ?? 0;
+  }, [rates, state.rateId]);
+
   const goNext = useCallback(async () => {
     if (step === 2) {
-      // Moving from Customs → Rates → trigger live rates fetch
       setRatesLoading(true);
       setStep(3);
       try {
@@ -83,7 +89,6 @@ export default function WizardScreen() {
         });
         setRates(res.rates);
       } catch {
-        // Fallback rates
         setRates([
           { id: 'ECO', totalPrice: 11.13 },
           { id: 'TRK', totalPrice: 16.05 },
@@ -129,10 +134,9 @@ export default function WizardScreen() {
   const goBack = useCallback(() => {
     if (step === 0) { router.back(); return; }
     setStep((s) => s - 1);
-    if (step === 3) { setRates(null); } // Clear rates when going back from rates step
+    if (step === 3) { setRates(null); }
   }, [step]);
 
-  // Success screen
   if (done) {
     return (
       <View style={styles.container}>
@@ -170,24 +174,29 @@ export default function WizardScreen() {
   })();
 
   const ctaText = buying ? 'Purchasing…' : step < 4 ? 'Continue' : 'Pay now';
+  const total = getTotal();
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.navBtn} onPress={goBack}>
-          <Ionicons name="chevron-back" size={20} color="#0B0B12" />
+          <Ionicons name="chevron-back" size={20} color={colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>New shipment</Text>
         <TouchableOpacity style={styles.navBtn} onPress={() => router.back()}>
-          <Ionicons name="close" size={18} color="#0B0B12" />
+          <Ionicons name="close" size={18} color={colors.ink} />
         </TouchableOpacity>
       </View>
 
-      {/* Progress */}
       <View style={styles.progress}>
         {STEP_TITLES.map((_, i) => (
-          <View key={i} style={[styles.seg, i <= step && styles.segDone]} />
+          <View key={i} style={styles.seg}>
+            <View style={[
+              styles.segFill,
+              i < step && styles.segDone,
+              i === step && styles.segCurrent,
+            ]} />
+          </View>
         ))}
       </View>
 
@@ -197,7 +206,6 @@ export default function WizardScreen() {
         <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
       </View>
 
-      {/* Content */}
       <ScrollView
         id="wizard-scroll"
         style={styles.content}
@@ -211,100 +219,141 @@ export default function WizardScreen() {
         {step === 4 && <StepReview state={state} balance={balance} />}
       </ScrollView>
 
-      {/* Footer */}
       <View style={styles.footer}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
+          <Ionicons name="chevron-back" size={16} color={colors.ink} />
+          <Text style={styles.backBtnText}>Back</Text>
+        </TouchableOpacity>
         {step === 4 && (
           <View style={styles.footTotal}>
             <Text style={styles.footTotalLabel}>Total · incl. tax</Text>
             <Text style={styles.footTotalValue}>
-              ${getTotal().toFixed(2)}
+              ${total.toFixed(2)}
             </Text>
           </View>
         )}
         <TouchableOpacity
-          style={[styles.cta, step === 4 && styles.ctaFull, !canContinue && styles.ctaDisabled]}
+          style={[styles.cta, !canContinue && styles.ctaDisabled]}
           onPress={goNext}
           disabled={!canContinue || buying}
         >
           {buying ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color={colors.white} />
           ) : (
             <Text style={styles.ctaText}>{ctaText}</Text>
           )}
         </TouchableOpacity>
       </View>
 
-      {/* SKU Sheet */}
       <SkuSheet open={skuSheet} onClose={() => setSkuSheet(false)} onPick={applySku} />
     </View>
   );
 }
 
-function getTotal() {
-  return 0; // Calculated dynamically in StepReview
-}
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F5' },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    paddingHorizontal: spacing.xl,
     paddingTop: 60,
+    paddingBottom: spacing.sm,
   },
   navBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadows.sm,
   },
-  headerTitle: { fontSize: 17, fontWeight: '600' },
-  progress: { flexDirection: 'row', gap: 6, paddingHorizontal: 20 },
-  seg: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,20,0.07)' },
-  segDone: { backgroundColor: '#635BFF' },
-  stepHeader: { paddingHorizontal: 20, marginTop: 16 },
-  stepCount: {
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    color: '#9A9AA4',
+  headerTitle: { ...typography.title3 },
+  progress: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: spacing.xl,
+    marginBottom: spacing.lg,
   },
-  stepTitle: { fontSize: 27, fontWeight: '700', letterSpacing: -0.6, marginTop: 4 },
-  stepSub: { fontSize: 14.5, color: '#6B6B76', marginTop: 4 },
+  seg: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.hairline,
+    overflow: 'hidden',
+  },
+  segFill: {
+    height: '100%',
+    width: 0,
+    backgroundColor: colors.accent,
+    borderRadius: 2,
+  },
+  segDone: { width: '100%' },
+  segCurrent: { width: '100%' },
+  stepHeader: { paddingHorizontal: spacing.xl, marginBottom: spacing.md },
+  stepCount: { ...typography.eyebrow },
+  stepTitle: {
+    fontSize: 27,
+    fontWeight: '700',
+    letterSpacing: -0.6,
+    color: colors.ink,
+    marginTop: spacing.xs,
+  },
+  stepSub: {
+    fontSize: 14.5,
+    color: colors.muted,
+    marginTop: spacing.xs,
+  },
   content: { flex: 1 },
-  contentInner: { padding: 20, paddingBottom: 40 },
+  contentInner: { padding: spacing.xl, paddingBottom: 40 },
   footer: {
-    padding: 20,
-    paddingBottom: 40,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
+    paddingBottom: 34,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(10,10,20,0.07)',
-    backgroundColor: 'rgba(242,242,245,0.95)',
+    borderTopColor: colors.hairline,
+    backgroundColor: colors.bg,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: spacing.md,
+  },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    height: 52,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surface,
+    ...shadows.sm,
+  },
+  backBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.ink,
   },
   footTotal: { alignItems: 'flex-end' },
-  footTotalLabel: { fontSize: 12.5, fontWeight: '600', color: '#9A9AA4' },
+  footTotalLabel: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: colors.faint,
+  },
   footTotalValue: {
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.5,
-    color: '#0B0B12',
+    color: colors.ink,
   },
   cta: {
     flex: 1,
     height: 52,
-    borderRadius: 14,
-    backgroundColor: '#635BFF',
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
     minWidth: 0,
   },
-  ctaFull: { flex: 1 },
   ctaDisabled: { opacity: 0.42 },
-  ctaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  ctaText: { color: colors.white, fontSize: 16, fontWeight: '600' },
 });
