@@ -1,32 +1,58 @@
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useState, useCallback, useEffect } from 'react';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useWalletData, useAutoReload } from '@/lib/queries';
-import { useAuth } from '@/store/auth';
+import { useWalletData } from '@/lib/queries';
 import { useBiometric } from '@/store/biometric';
+import { useWallet } from '@/store/wallet';
+import { BalanceCard } from '@/components/ui/BalanceCard';
+import { Group } from '@/components/ui/Cell';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { colors, borderRadius, spacing } from '@/lib/theme';
 
-const TX_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; color: string }> = {
-  deposit: { icon: 'arrow-up', color: '#1E9E6A' },
-  shipment_charge: { icon: 'cube', color: '#635BFF' },
-  refund: { icon: 'refresh', color: '#C8860B' },
+const TX_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }> = {
+  deposit: { icon: 'arrow-up', color: colors.green, bg: colors.greenSoft },
+  shipment_charge: { icon: 'cube', color: colors.accent, bg: colors.accentSoft },
+  refund: { icon: 'refresh', color: colors.amber, bg: colors.amberSoft },
+  admin_credit: { icon: 'arrow-up', color: colors.green, bg: colors.greenSoft },
+  admin_debit: { icon: 'arrow-down', color: colors.red, bg: colors.redSoft },
 };
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[d.getMonth()]} ${d.getDate()}`;
+}
+
+function calcStats(transactions: { type: string; amount: number }[]) {
+  let shipped = 0, saved = 0, loaded = 0;
+  for (const tx of transactions) {
+    if (tx.type === 'shipment_charge') shipped += Math.abs(tx.amount);
+    else if (tx.type === 'refund') saved += tx.amount;
+    else if (tx.type === 'deposit' || tx.type === 'admin_credit') loaded += tx.amount;
+  }
+  return { shipped, saved, loaded };
+}
 
 export default function WalletScreen() {
   const { data, isLoading, refetch } = useWalletData();
-  const isGuest = useAuth((s) => s.isGuest);
-  const autoReloadMut = useAutoReload();
-  const [refreshing, setRefreshing] = useState(false);
-  const [authing, setAuthing] = useState(false);
-  const [showAuto, setShowAuto] = useState(false);
-  const [arEnabled, setArEnabled] = useState(false);
-  const [arThreshold, setArThreshold] = useState('10');
-  const [arAmount, setArAmount] = useState('50');
-
+  const setBalance = useWallet((s) => s.setBalance);
   const biometricEnabled = useBiometric((s) => s.enabled);
   const biometricLocked = useBiometric((s) => s.locked);
   const unlock = useBiometric((s) => s.unlock);
+  const [refreshing, setRefreshing] = useState(false);
+  const [authing, setAuthing] = useState(false);
+
+  useEffect(() => {
+    if (data?.balance != null) setBalance(data.balance);
+  }, [data?.balance, setBalance]);
+
+  useEffect(() => {
+    if (biometricEnabled && biometricLocked && !authing) {
+      doAuth();
+    }
+  }, [biometricEnabled, biometricLocked]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -34,49 +60,26 @@ export default function WalletScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  // Auto-prompt when biometric is locked
-  useEffect(() => {
-    if (biometricEnabled && biometricLocked && !authing) {
-      doAuth();
-    }
-  }, [biometricEnabled, biometricLocked]);
-
-  // Sync auto-reload state from API
-  useEffect(() => {
-    const ar = (data as any)?.autoReload;
-    if (ar) {
-      setArEnabled(ar.enabled ?? false);
-      setArThreshold(String(ar.threshold ?? 10));
-      setArAmount(String(ar.amount ?? 50));
-    }
-  }, [data]);
-
   const doAuth = useCallback(async () => {
     setAuthing(true);
-    const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
-
-    // Check which type is available for UI messaging
     const result = await LocalAuthentication.authenticateAsync({
       promptMessage: 'Unlock Wallet',
       cancelLabel: 'Cancel',
       fallbackLabel: 'Use passcode',
       disableDeviceFallback: false,
     });
-
-    if (result.success) {
-      unlock();
-    }
+    if (result.success) unlock();
     setAuthing(false);
   }, [unlock]);
 
   const transactions = data?.transactions ?? [];
+  const stats = calcStats(transactions);
 
-  // Show biometric lock when wallet is locked
   if (biometricEnabled && biometricLocked) {
     return (
       <View style={styles.container}>
         <View style={styles.lockOverlay}>
-          <Ionicons name="lock-closed" size={48} color="#635BFF" />
+          <Ionicons name="lock-closed" size={48} color={colors.accent} />
           <Text style={styles.lockTitle}>Wallet Locked</Text>
           <Text style={styles.lockSub}>Authenticate to view your wallet</Text>
           <TouchableOpacity style={styles.unlockBtn} onPress={doAuth} disabled={authing}>
@@ -95,248 +98,162 @@ export default function WalletScreen() {
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#635BFF" />}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
     >
       <Text style={styles.title}>Wallet</Text>
 
-      {/* Balance Card */}
-      <View style={styles.balanceCard}>
-        <View style={styles.balanceGlow} />
-        <View style={styles.balanceContent}>
-          <View>
-            <Text style={styles.balanceLabel}>Wallet balance</Text>
-            <Text style={styles.balanceAmount}>
-              ${(data?.balance ?? 0).toFixed(2)}
-            </Text>
-            <View style={styles.balanceFooter}>
-              <Ionicons name="shield-checkmark" size={13} color="rgba(255,255,255,0.72)" />
-              <Text style={styles.balanceNote}>CAD · Prepaid · Secured</Text>
+      {isLoading ? (
+        <View style={styles.loadingWrap}>
+          <Skeleton height={140} radius={borderRadius.lg} />
+          <View style={styles.statsRow}>
+            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+            <Skeleton height={80} radius={borderRadius.md} style={{ flex: 1 }} />
+          </View>
+          <Skeleton height={24} width="40%" style={{ marginTop: spacing.xl }} />
+          <Skeleton height={200} radius={borderRadius.md} style={{ marginTop: spacing.md }} />
+        </View>
+      ) : (
+        <>
+          <BalanceCard
+            balance={data?.balance ?? 0}
+            onAdd={() => router.push('/wallet/topup')}
+            style={{ marginTop: spacing.lg }}
+          />
+
+          <View style={styles.statsRow}>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>Shipped</Text>
+              <Text style={styles.statValue}>${stats.shipped.toFixed(2)}</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>Saved</Text>
+              <Text style={[styles.statValue, { color: colors.green }]}>${stats.saved.toFixed(2)}</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>Loaded</Text>
+              <Text style={[styles.statValue, { color: colors.accent }]}>${stats.loaded.toFixed(2)}</Text>
             </View>
           </View>
-          <TouchableOpacity
-            style={styles.addBtn}
-            onPress={() => router.push('/wallet/topup')}
-          >
-            <Ionicons name="add" size={22} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
 
-      {/* Action Buttons */}
-      <View style={styles.actions}>
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.actionPrimary]}
-          onPress={() => router.push('/wallet/topup')}
-        >
-          <Ionicons name="add" size={19} color="#fff" />
-          <Text style={styles.actionPrimaryText}>Add funds</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.actionSecondary]}
-          onPress={() => router.push('/wizard')}
-        >
-          <Ionicons name="arrow-up" size={19} color="#0B0B12" />
-          <Text style={styles.actionSecondaryText}>Ship</Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.sectionTitle}>Recent activity</Text>
 
-      {/* Stats */}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Spent this month</Text>
-          <Text style={styles.statValue}>$41.19</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Labels bought</Text>
-          <Text style={styles.statValue}>3</Text>
-        </View>
-      </View>
-
-      {/* Transactions */}
-      <Text style={styles.sectionTitle}>Transactions</Text>
-      {transactions.length === 0 && !isLoading && (
-        <Text style={styles.emptyText}>No transactions yet</Text>
-      )}
-      <View style={styles.txGroup}>
-        {transactions.slice(0, 20).map((tx, i) => {
-          const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: '#9A9AA4' };
-          return (
-            <View key={tx._id || i} style={styles.txRow}>
-              <View style={[styles.txIcon, { backgroundColor: `${meta.color}20` }]}>
-                <Ionicons name={meta.icon} size={18} color={meta.color} />
+          {transactions.length === 0 ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="wallet-outline" size={28} color={colors.faint} />
               </View>
-              <View style={styles.txInfo}>
-                <Text style={styles.txLabel}>{tx.description}</Text>
-                <Text style={styles.txSub}>{tx.createdAt?.slice(0, 10)}</Text>
-              </View>
-              <Text
-                style={[
-                  styles.txAmount,
-                  { color: tx.amount > 0 ? '#1E9E6A' : '#0B0B12' },
-                ]}
-              >
-                {tx.amount > 0 ? '+' : ''}${tx.amount.toFixed(2)}
-              </Text>
+              <Text style={styles.emptyTitle}>No activity yet</Text>
+              <Text style={styles.emptySub}>Your transactions will appear here</Text>
             </View>
-          );
-        })}
-      </View>
-
-      {/* Auto-Reload */}
-      <TouchableOpacity style={styles.autoHeader} onPress={() => setShowAuto((s) => !s)}>
-        <View style={styles.autoHeaderLeft}>
-          <Ionicons name="refresh" size={18} color="#635BFF" />
-          <Text style={styles.autoHeaderText}>Auto-Reload</Text>
-        </View>
-        <Ionicons name={showAuto ? 'chevron-up' : 'chevron-down'} size={18} color="#9A9AA4" />
-      </TouchableOpacity>
-      {showAuto && (
-        <View style={styles.autoCard}>
-          <View style={styles.autoRow}>
-            <Text style={styles.autoLabel}>Enable auto-reload</Text>
-            <Switch
-              value={arEnabled}
-              onValueChange={setArEnabled}
-              trackColor={{ false: '#E5E5EA', true: '#C7C2FF' }}
-              thumbColor={arEnabled ? '#635BFF' : '#fff'}
-            />
-          </View>
-          {arEnabled && (
-            <>
-              <View style={styles.autoRow}>
-                <Text style={styles.autoLabel}>Reload when balance drops below</Text>
-                <View style={styles.autoInputRow}>
-                  <Text style={styles.autoDollar}>$</Text>
-                  <TextInput
-                    style={styles.autoInput}
-                    value={arThreshold}
-                    onChangeText={setArThreshold}
-                    keyboardType="number-pad"
-                    placeholder="10"
-                    placeholderTextColor="#9A9AA4"
-                  />
-                </View>
-              </View>
-              <View style={styles.autoRow}>
-                <Text style={styles.autoLabel}>Add funds amount</Text>
-                <View style={styles.autoInputRow}>
-                  <Text style={styles.autoDollar}>$</Text>
-                  <TextInput
-                    style={styles.autoInput}
-                    value={arAmount}
-                    onChangeText={setArAmount}
-                    keyboardType="number-pad"
-                    placeholder="50"
-                    placeholderTextColor="#9A9AA4"
-                  />
-                </View>
-              </View>
-              <TouchableOpacity
-                style={styles.autoSaveBtn}
-                onPress={async () => {
-                  await autoReloadMut.mutateAsync({
-                    enabled: arEnabled,
-                    threshold: parseInt(arThreshold) || 10,
-                    amount: parseInt(arAmount) || 50,
-                  });
-                }}
-                disabled={autoReloadMut.isPending}
-              >
-                {autoReloadMut.isPending ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.autoSaveText}>Save</Text>
-                )}
-              </TouchableOpacity>
-            </>
+          ) : (
+            <Group>
+              {transactions.map((tx, i) => {
+                const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: colors.faint, bg: colors.surface2 };
+                return (
+                  <TouchableOpacity key={tx._id || i} style={styles.txRow} activeOpacity={0.6}>
+                    <View style={[styles.txIcon, { backgroundColor: meta.bg }]}>
+                      <Ionicons name={meta.icon} size={18} color={meta.color} />
+                    </View>
+                    <View style={styles.txInfo}>
+                      <Text style={styles.txLabel} numberOfLines={1}>{tx.description}</Text>
+                      <Text style={styles.txDate}>{formatDate(tx.createdAt)}</Text>
+                    </View>
+                    <Text style={[styles.txAmount, { color: tx.amount > 0 ? colors.green : colors.ink }]}>
+                      {tx.amount > 0 ? '+' : ''}${Math.abs(tx.amount).toFixed(2)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </Group>
           )}
-        </View>
+        </>
       )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F5' },
-  content: { padding: 20, paddingBottom: 40 },
-  title: { fontSize: 32, fontWeight: '700', letterSpacing: -0.8, marginTop: 6 },
-
-  // Lock overlay
+  container: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: spacing.xl, paddingBottom: 40 },
+  title: { fontSize: 32, fontWeight: '700', letterSpacing: -0.8, color: colors.ink },
+  loadingWrap: { gap: spacing.md, marginTop: spacing.lg },
   lockOverlay: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 40,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 40,
   },
-  lockTitle: { fontSize: 22, fontWeight: '700', color: '#0B0B12' },
-  lockSub: { fontSize: 15, color: '#6B6B76', textAlign: 'center' },
+  lockTitle: { fontSize: 22, fontWeight: '700', color: colors.ink },
+  lockSub: { fontSize: 15, color: colors.muted, textAlign: 'center' },
   unlockBtn: {
-    marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8,
-    height: 50, paddingHorizontal: 28, borderRadius: 14, backgroundColor: '#635BFF',
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    height: 50,
+    paddingHorizontal: 28,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.accent,
   },
   unlockText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-
-  balanceCard: {
-    borderRadius: 30,
-    backgroundColor: '#635BFF',
-    overflow: 'hidden',
-    marginTop: 16,
-    shadowColor: '#635BFF',
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.4,
-    shadowRadius: 30,
-    elevation: 10,
+  statsRow: { flexDirection: 'row', gap: 10, marginTop: spacing.lg },
+  statCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    padding: 15,
+    alignItems: 'center',
   },
-  balanceGlow: { ...StyleSheet.absoluteFill, backgroundColor: 'transparent' },
-  balanceContent: {
-    padding: 22,
+  statLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.faint,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.ink,
+    marginTop: 6,
+    fontVariant: ['tabular-nums'],
+  },
+  sectionTitle: {
+    fontSize: 21,
+    fontWeight: '700',
+    letterSpacing: -0.4,
+    color: colors.ink,
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  emptyState: { alignItems: 'center', paddingVertical: 40, gap: 8 },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
+  emptySub: { fontSize: 14, color: colors.muted },
+  txRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    zIndex: 2,
+    alignItems: 'center',
+    gap: 14,
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.hairline,
   },
-  balanceLabel: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.82)', letterSpacing: 0.2 },
-  balanceAmount: { fontSize: 38, fontWeight: '700', color: '#fff', letterSpacing: -1.2, marginTop: 4, fontVariant: ['tabular-nums'] },
-  balanceFooter: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 7 },
-  balanceNote: { fontSize: 12.5, color: 'rgba(255,255,255,0.72)' },
-  addBtn: { width: 46, height: 46, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  actions: { flexDirection: 'row', gap: 12, marginTop: 16 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, height: 52, borderRadius: 14 },
-  actionPrimary: { backgroundColor: '#635BFF' },
-  actionSecondary: { backgroundColor: '#fff' },
-  actionPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  actionSecondaryText: { color: '#0B0B12', fontSize: 16, fontWeight: '600' },
-  statsRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  statCard: { flex: 1, backgroundColor: '#fff', borderRadius: 22, padding: 15 },
-  statLabel: { fontSize: 12, fontWeight: '600', color: '#9A9AA4' },
-  statValue: { fontSize: 21, fontWeight: '700', color: '#0B0B12', marginTop: 5, fontVariant: ['tabular-nums'] },
-  sectionTitle: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4, marginTop: 28, marginBottom: 12 },
-  emptyText: { color: '#9A9AA4', fontSize: 14, textAlign: 'center', marginTop: 20 },
-  txGroup: { backgroundColor: '#fff', borderRadius: 22, overflow: 'hidden' },
-  txRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 15, borderBottomWidth: 1, borderBottomColor: 'rgba(10,10,20,0.07)' },
   txIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   txInfo: { flex: 1 },
-  txLabel: { fontSize: 14.5, fontWeight: '600', color: '#0B0B12' },
-  txSub: { fontSize: 12.5, color: '#9A9AA4', marginTop: 2 },
+  txLabel: { fontSize: 14.5, fontWeight: '600', color: colors.ink },
+  txDate: { fontSize: 12.5, color: colors.faint, marginTop: 2 },
   txAmount: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
-
-  // Auto-Reload
-  autoHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginTop: 28, marginBottom: 12,
-  },
-  autoHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  autoHeaderText: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4 },
-  autoCard: { backgroundColor: '#fff', borderRadius: 22, padding: 16, gap: 14 },
-  autoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  autoLabel: { fontSize: 14, fontWeight: '500', color: '#0B0B12', flex: 1 },
-  autoInputRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  autoDollar: { fontSize: 16, fontWeight: '600', color: '#9A9AA4' },
-  autoInput: {
-    backgroundColor: '#F7F7F9', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
-    fontSize: 16, fontWeight: '700', color: '#0B0B12', width: 80, textAlign: 'center',
-  },
-  autoSaveBtn: {
-    height: 44, borderRadius: 12, backgroundColor: '#635BFF',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  autoSaveText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });

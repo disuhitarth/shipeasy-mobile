@@ -27,7 +27,9 @@
       },
       "permissions": [
         "USE_BIOMETRIC",
-        "POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -42,8 +44,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "your-project-id"
+        "projectId": "81108d87-5247-40fe-a4a4-255845452502"
       }
-    }
+    },
+    "owner": "disuhitarth-projects"
   }
 }
