@@ -287,6 +287,24 @@ export function useParseBatch() {
   });
 }
 
+export function useParseImage() {
+  return useMutation({
+    mutationFn: async ({ uri, mimeType, fileName }: { uri: string; mimeType?: string; fileName?: string }) => {
+      const form = new FormData();
+      form.append('image', {
+        uri,
+        name: fileName ?? `capture.${(mimeType ?? 'image/jpeg').split('/')[1] ?? 'jpg'}`,
+        type: mimeType ?? 'image/jpeg',
+      } as any);
+      const res = await api.post('/ai/parse-image', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        transformRequest: (data) => data,
+      });
+      return res.data;
+    },
+  });
+}
+
 export function useClassifyHS() {
   return useMutation({
     mutationFn: async (description: string) => {

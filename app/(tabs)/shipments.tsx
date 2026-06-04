@@ -1,17 +1,20 @@
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, RefreshControl, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
-import { useInfiniteShipments } from '@/lib/queries';
+import { useInfiniteShipments, useVoidShipment } from '@/lib/queries';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PressableCard, PressableScale } from '@/components/PressableScale';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
-import { colors, spacing, borderRadius } from '@/lib/theme';
+import { colors, spacing, borderRadius, shadows } from '@/lib/theme';
 import { useDebounce } from '@/lib/useDebounce';
 import { toast } from '@/lib/toast';
 import * as Haptics from '@/lib/haptics';
+import { LocalStore } from '@/lib/localStore';
+import { RecentSearchChips } from '@/components/RecentSearchChips';
+import { Pressable } from 'react-native';
 
 const STATUS_TABS = ['All', 'Active', 'Delivered'];
 
@@ -59,18 +62,52 @@ function EmptyState({ query, onClear }: { query?: string; onClear?: () => void }
   );
 }
 
-function ShipmentCard({ shipment, index }: { shipment: any; index: number }) {
+interface ShipmentCardProps {
+  shipment: any;
+  index: number;
+  pinned: boolean;
+  selectionMode: boolean;
+  selected: boolean;
+  onLongPress: () => void;
+  onPressIn: () => void;
+}
+
+function ShipmentCard({
+  shipment,
+  index,
+  pinned,
+  selectionMode,
+  selected,
+  onLongPress,
+  onPressIn,
+}: ShipmentCardProps) {
   return (
     <Animated.View
       entering={FadeInDown.duration(380).delay(Math.min(index, 12) * 50)}
       layout={LinearTransition.springify().damping(20).stiffness(200)}
     >
-      <PressableCard
-        style={styles.card}
-        onPress={() => router.push(`/shipments/${shipment.shipCode}`)}
-        haptic="light"
+      <Pressable
+        onPress={() => {
+          if (selectionMode) {
+            onPressIn();
+          } else {
+            router.push(`/shipments/${shipment.shipCode}`);
+          }
+        }}
+        onLongPress={onLongPress}
+        delayLongPress={280}
+        style={[
+          styles.card,
+          selected && styles.cardSelected,
+          pinned && styles.cardPinned,
+        ]}
       >
         <View style={styles.cardTop}>
+          {selectionMode ? (
+            <View style={[styles.checkbox, selected && styles.checkboxOn]}>
+              {selected ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+            </View>
+          ) : null}
           <View style={styles.pkgIcon}>
             <Ionicons name="cube" size={20} color={colors.muted} />
           </View>
@@ -93,7 +130,14 @@ function ShipmentCard({ shipment, index }: { shipment: any; index: number }) {
               </Text>
             </View>
           </View>
-          <Badge status={shipment.status} />
+          <View style={styles.cardTopRight}>
+            {pinned ? (
+              <View style={styles.pinIcon}>
+                <Ionicons name="pin" size={12} color={colors.amber} />
+              </View>
+            ) : null}
+            <Badge status={shipment.status} />
+          </View>
         </View>
 
         <View style={styles.cardFooter}>
@@ -109,7 +153,7 @@ function ShipmentCard({ shipment, index }: { shipment: any; index: number }) {
           </View>
           <Text style={styles.priceText}>${shipment.customerTotal.toFixed(2)}</Text>
         </View>
-      </PressableCard>
+      </Pressable>
     </Animated.View>
   );
 }
@@ -159,11 +203,37 @@ function EndOfList() {
 }
 
 export default function ShipmentsScreen() {
+  const params = useLocalSearchParams<{ q?: string }>();
   const [tab, setTab] = useState('All');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const debouncedSearch = useDebounce(search, 300);
   const isDebouncing = search !== debouncedSearch;
+
+  useEffect(() => {
+    if (typeof params.q === 'string' && params.q.length > 0) {
+      setSearch(params.q);
+    }
+  }, [params.q]);
+
+  useEffect(() => {
+    let alive = true;
+    LocalStore.getPinned().then((p) => {
+      if (alive) setPinned(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (debouncedSearch.trim()) {
+      void LocalStore.addSearchHistory('shipments', debouncedSearch.trim());
+    }
+  }, [debouncedSearch]);
 
   const filter = useMemo(
     () => ({ status: STATUS_FILTER[tab], sort, search: debouncedSearch || undefined }),
@@ -180,6 +250,7 @@ export default function ShipmentsScreen() {
   } = useInfiniteShipments(filter);
 
   const [refreshing, setRefreshing] = useState(false);
+  const voidShipment = useVoidShipment();
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -189,10 +260,18 @@ export default function ShipmentsScreen() {
     toast.success('Updated!');
   }, [refetch]);
 
-  const shipments = useMemo(
+  const allShipments = useMemo(
     () => (data?.pages.flatMap((p) => p.shipments) ?? []),
     [data],
   );
+
+  const shipments = useMemo(() => {
+    if (pinned.length === 0) return allShipments;
+    const pinnedSet = new Set(pinned);
+    const pinnedItems = allShipments.filter((s: any) => pinnedSet.has(s.shipCode));
+    const others = allShipments.filter((s: any) => !pinnedSet.has(s.shipCode));
+    return [...pinnedItems, ...others];
+  }, [allShipments, pinned]);
 
   const clearSearch = useCallback(() => {
     Haptics.light();
@@ -205,6 +284,60 @@ export default function ShipmentsScreen() {
     }
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+  const onLongPress = useCallback((shipCode: string) => {
+    Haptics.medium();
+    setSelectionMode(true);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.add(shipCode);
+      return next;
+    });
+  }, []);
+
+  const toggleSelect = useCallback((shipCode: string) => {
+    if (!selectionMode) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(shipCode)) next.delete(shipCode);
+      else next.add(shipCode);
+      return next;
+    });
+  }, [selectionMode]);
+
+  const exitSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelected(new Set());
+  }, []);
+
+  const voidSelected = useCallback(() => {
+    if (selected.size === 0) return;
+    const codes = Array.from(selected);
+    Alert.alert(
+      'Void shipments',
+      `Void ${codes.length} label${codes.length !== 1 ? 's' : ''}? This refunds the cost to your wallet.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Void all',
+          style: 'destructive',
+          onPress: async () => {
+            let success = 0;
+            for (const code of codes) {
+              try {
+                await voidShipment.mutateAsync(code);
+                success++;
+              } catch {}
+            }
+            Haptics.success();
+            toast.success(`Voided ${success} of ${codes.length} labels`);
+            exitSelection();
+            await refetch();
+          },
+        },
+      ],
+    );
+  }, [selected, voidShipment, refetch, exitSelection]);
+
   const showInitialSkeleton = isLoading && shipments.length === 0;
 
   return (
@@ -213,79 +346,127 @@ export default function ShipmentsScreen() {
         <View style={styles.headerWrap}>
           <Animated.Text entering={FadeInDown.duration(380)} style={styles.title}>Shipments</Animated.Text>
 
-          <Animated.View entering={FadeInDown.duration(380).delay(50)}>
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color={colors.faint} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search by tracking N°, recipient, code…"
-                placeholderTextColor={colors.faint}
-                value={search}
-                onChangeText={setSearch}
-                returnKeyType="search"
-                autoCorrect={false}
-                autoCapitalize="none"
+          {selectionMode ? (
+            <Animated.View entering={FadeInDown.duration(280)} style={styles.selectionBar}>
+              <PressableScale onPress={exitSelection} haptic="light">
+                <Ionicons name="close" size={20} color={colors.ink} />
+              </PressableScale>
+              <Text style={styles.selectionText}>
+                {selected.size} selected
+              </Text>
+              <View style={{ flex: 1 }} />
+              <PressableScale
+                onPress={() => setSelected(new Set(shipments.map((s: any) => s.shipCode)))}
+                haptic="light"
+                style={styles.selectionAction}
+              >
+                <Ionicons name="checkmark-done" size={16} color={colors.accent} />
+                <Text style={styles.selectionActionText}>All</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={voidSelected}
+                haptic="warning"
+                style={[styles.selectionCta, selected.size === 0 && styles.selectionCtaDisabled]}
+                disabled={selected.size === 0}
+              >
+                <Ionicons name="trash-outline" size={15} color="#fff" />
+                <Text style={styles.selectionCtaText}>Void selected</Text>
+              </PressableScale>
+            </Animated.View>
+          ) : (
+            <Animated.View entering={FadeInDown.duration(380).delay(50)}>
+              <View style={styles.searchBar}>
+                <Ionicons name="search" size={18} color={colors.faint} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search by tracking N°, recipient, code…"
+                  placeholderTextColor={colors.faint}
+                  value={search}
+                  onChangeText={setSearch}
+                  returnKeyType="search"
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+                {isDebouncing ? (
+                  <ActivityIndicator size="small" color={colors.faint} />
+                ) : search.length > 0 ? (
+                  <TouchableOpacity
+                    onPress={clearSearch}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="close-circle" size={18} color={colors.faint} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <RecentSearchChips
+                scope="shipments"
+                visible={search.length === 0}
+                onPick={(t) => setSearch(t)}
               />
-              {isDebouncing ? (
-                <ActivityIndicator size="small" color={colors.faint} />
-              ) : search.length > 0 ? (
-                <TouchableOpacity
-                  onPress={clearSearch}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Ionicons name="close-circle" size={18} color={colors.faint} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </Animated.View>
+            </Animated.View>
+          )}
 
-          <Animated.View entering={FadeInDown.duration(380).delay(100)}>
-            <View style={styles.segment}>
-              {STATUS_TABS.map((t) => (
-                <PressableScale
-                  key={t}
-                  style={[styles.segBtn, tab === t && styles.segBtnActive]}
-                  onPress={() => {
-                    if (t !== tab) Haptics.light();
-                    setTab(t);
-                  }}
-                  haptic="light"
-                  scaleTo={0.96}
-                >
-                  <Text style={[styles.segText, tab === t && styles.segTextActive]}>
-                    {t}
-                  </Text>
-                </PressableScale>
-              ))}
-            </View>
-          </Animated.View>
+          {!selectionMode ? (
+            <>
+              <Animated.View entering={FadeInDown.duration(380).delay(100)}>
+                <View style={styles.segment}>
+                  {STATUS_TABS.map((t) => (
+                    <PressableScale
+                      key={t}
+                      style={[styles.segBtn, tab === t && styles.segBtnActive]}
+                      onPress={() => {
+                        if (t !== tab) Haptics.light();
+                        setTab(t);
+                      }}
+                      haptic="light"
+                      scaleTo={0.96}
+                    >
+                      <Text style={[styles.segText, tab === t && styles.segTextActive]}>
+                        {t}
+                      </Text>
+                    </PressableScale>
+                  ))}
+                </View>
+              </Animated.View>
 
-          <Animated.View entering={FadeInDown.duration(380).delay(150)}>
-            <View style={styles.sortRow}>
-              {SORT_OPTIONS.map((opt) => (
-                <PressableScale
-                  key={opt.key}
-                  style={[styles.sortChip, sort === opt.key && styles.sortChipActive]}
-                  onPress={() => {
-                    if (sort !== opt.key) Haptics.selection();
-                    setSort(opt.key);
-                  }}
-                  haptic="selection"
-                  scaleTo={0.95}
-                >
-                  <Text style={[styles.sortChipText, sort === opt.key && styles.sortChipTextActive]}>
-                    {opt.label}
-                  </Text>
-                </PressableScale>
-              ))}
-            </View>
-          </Animated.View>
+              <Animated.View entering={FadeInDown.duration(380).delay(150)}>
+                <View style={styles.sortRow}>
+                  {SORT_OPTIONS.map((opt) => (
+                    <PressableScale
+                      key={opt.key}
+                      style={[styles.sortChip, sort === opt.key && styles.sortChipActive]}
+                      onPress={() => {
+                        if (sort !== opt.key) Haptics.selection();
+                        setSort(opt.key);
+                      }}
+                      haptic="selection"
+                      scaleTo={0.95}
+                    >
+                      <Text style={[styles.sortChipText, sort === opt.key && styles.sortChipTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </PressableScale>
+                  ))}
+                </View>
+              </Animated.View>
+            </>
+          ) : null}
         </View>
 
         <Animated.FlatList
           data={shipments}
-          keyExtractor={(item) => item.shipCode}
-          renderItem={({ item, index }) => <ShipmentCard shipment={item} index={index} />}
+          keyExtractor={(item: any) => item.shipCode}
+          renderItem={({ item, index }: any) => (
+            <ShipmentCard
+              shipment={item}
+              index={index}
+              pinned={pinned.includes(item.shipCode)}
+              selectionMode={selectionMode}
+              selected={selected.has(item.shipCode)}
+              onLongPress={() => onLongPress(item.shipCode)}
+              onPressIn={() => toggleSelect(item.shipCode)}
+            />
+          )}
           contentContainerStyle={styles.content}
           ListEmptyComponent={showInitialSkeleton ? <LoadingSkeleton /> : <EmptyState query={debouncedSearch} onClear={clearSearch} />}
           ListFooterComponent={
@@ -411,16 +592,39 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     padding: spacing.lg,
     marginTop: spacing.lg,
+    gap: 12,
     shadowColor: 'rgba(10,10,25,0.06)',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 1,
     shadowRadius: 24,
     elevation: 4,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  cardSelected: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  cardPinned: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.amber,
   },
   cardTop: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  cardTopRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  pinIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.amberSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   pkgIcon: {
     width: 44,
@@ -480,8 +684,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: spacing.lg,
-    marginTop: spacing.lg,
+    paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: colors.hairline,
   },
@@ -579,4 +782,64 @@ const styles = StyleSheet.create({
     color: colors.faint,
     fontWeight: '500',
   },
+  checkbox: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 2,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  selectionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: spacing.md,
+    backgroundColor: colors.accentSoft,
+    borderRadius: borderRadius.sm,
+  },
+  selectionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.ink,
+  },
+  selectionAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  selectionActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  selectionCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: colors.red,
+    borderRadius: 12,
+  },
+  selectionCtaDisabled: {
+    opacity: 0.5,
+  },
+  selectionCtaText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
 });
+
+const _SHADOWS = shadows;

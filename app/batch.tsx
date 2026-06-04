@@ -1,17 +1,19 @@
-import { View, Text, TextInput, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, ActivityIndicator, ActionSheetIOS, Platform, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useState, useCallback, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInUp, FadeInDown, ZoomIn } from 'react-native-reanimated';
-import { useParseBatch, useGetRates, useCreateShipment } from '@/lib/queries';
+import * as ImagePicker from 'expo-image-picker';
+import { useParseBatch, useParseImage, useGetRates, useCreateShipment } from '@/lib/queries';
 import { useWallet } from '@/store/wallet';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { colors, spacing, borderRadius } from '@/lib/theme';
 import { PressableScale } from '@/components/PressableScale';
 import * as Haptics from '@/lib/haptics';
+import { toast } from '@/lib/toast';
 import type { AIParsedAddress } from '@/types';
 
 type Step = 'input' | 'parsing' | 'review' | 'rates' | 'done';
@@ -39,6 +41,7 @@ export default function BatchScreen() {
   const balance = useWallet((s) => s.balance);
   const deduct = useWallet((s) => s.deduct);
   const parseBatch = useParseBatch();
+  const parseImage = useParseImage();
   const getRates = useGetRates();
   const createShipment = useCreateShipment();
 
@@ -76,6 +79,77 @@ export default function BatchScreen() {
       setParsing(false);
     }
   }, [text, parseBatch]);
+
+  const doVision = useCallback(async () => {
+    Haptics.light();
+    if (Platform.OS === 'web') {
+      toast.info('Camera not available on web');
+      return;
+    }
+    const launch = async (source: 'camera' | 'library') => {
+      try {
+        if (source === 'camera') {
+          const cam = await ImagePicker.requestCameraPermissionsAsync();
+          if (!cam.granted) {
+            toast.error('Camera permission required');
+            return;
+          }
+        } else {
+          const lib = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!lib.granted) {
+            toast.error('Photo library permission required');
+            return;
+          }
+        }
+        const res = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.7,
+          allowsEditing: false,
+          exif: false,
+        });
+        if (res.canceled || !res.assets?.[0]) return;
+        const asset = res.assets[0];
+        setStep('parsing');
+        setReveal(0);
+        setParseError(null);
+        Haptics.success();
+        const data = await parseImage.mutateAsync({
+          uri: asset.uri,
+          mimeType: asset.mimeType ?? 'image/jpeg',
+          fileName: asset.fileName ?? undefined,
+        });
+        const list: AIParsedAddress[] = (data.addresses || []).map((a: AIParsedAddress) => ({
+          ...a,
+          weight: a.weight || 1,
+          weight_unit: a.weight_unit || 'lb',
+        }));
+        list.forEach((_, i) => setTimeout(() => setReveal(i + 1), 350 + i * 280));
+        setTimeout(() => {
+          setAddresses(list);
+          setNotes([`AI Vision extracted ${list.length} address${list.length !== 1 ? 'es' : ''} from image`]);
+          setStep('review');
+        }, 350 + list.length * 280 + 200);
+      } catch (err: any) {
+        setParseError(err?.message || 'Failed to read image');
+        setStep('input');
+      }
+    };
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options: ['Cancel', 'Take Photo', 'Choose from Library'], cancelButtonIndex: 0 },
+        (i) => {
+          if (i === 1) launch('camera');
+          else if (i === 2) launch('library');
+        },
+      );
+    } else {
+      Alert.alert('AI Vision', 'Pick a source', [
+        { text: 'Take Photo', onPress: () => launch('camera') },
+        { text: 'Choose from Library', onPress: () => launch('library') },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [parseImage]);
 
   const rateAll = useCallback(async () => {
     setStep('rates');
@@ -234,7 +308,7 @@ export default function BatchScreen() {
                 <Ionicons name="copy-outline" size={15} color={colors.accent} />
                 <Text style={styles.ghostLinkText}>Paste sample</Text>
               </PressableScale>
-              <PressableScale style={styles.visionBtn} onPress={() => Haptics.light()} haptic="light">
+              <PressableScale style={styles.visionBtn} onPress={doVision} haptic="light">
                 <Ionicons name="scan" size={17} color={colors.accent} />
                 <Text style={styles.visionBtnText}>AI Vision</Text>
               </PressableScale>

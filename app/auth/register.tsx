@@ -52,7 +52,9 @@ export default function RegisterScreen() {
     try {
       await register(name.trim(), email.trim(), password);
       toast.success('Account created');
-      router.back();
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 150);
     } catch (e: any) {
       toast.error(e?.message || 'Could not create account');
     } finally {
@@ -71,7 +73,7 @@ export default function RegisterScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <PressableScale style={styles.backBtn} onPress={() => router.back()} haptic="light">
+        <PressableScale style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }} haptic="light">
           <Ionicons name="chevron-back" size={24} color={colors.ink} />
         </PressableScale>
       </Animated.View>

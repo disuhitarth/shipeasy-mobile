@@ -1,22 +1,26 @@
-import React, { ReactNode, useCallback, useMemo } from 'react';
-import { Pressable, PressableProps, StyleProp, ViewStyle, Platform, View } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { View, ViewStyle, StyleProp, Pressable, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
-  interpolate,
+  withSequence,
+  withDelay,
+  withRepeat,
   Easing,
+  interpolate,
+  cancelAnimation,
   runOnJS,
 } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { colors } from '@/lib/theme';
 import * as Haptics from '@/lib/haptics';
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export type HapticKind = 'none' | 'light' | 'medium' | 'success' | 'warning' | 'error' | 'selection';
 
-interface PressableScaleProps extends Omit<PressableProps, 'style' | 'children'> {
-  children: ReactNode;
+interface PressableScaleProps extends Omit<React.ComponentProps<typeof Pressable>, 'style' | 'children'> {
+  children: React.ReactNode;
   scaleTo?: number;
   duration?: number;
   haptic?: HapticKind;
@@ -28,34 +32,21 @@ interface PressableScaleProps extends Omit<PressableProps, 'style' | 'children'>
 
 function triggerHaptic(kind: HapticKind) {
   switch (kind) {
-    case 'light':
-      Haptics.light();
-      break;
-    case 'medium':
-      Haptics.medium();
-      break;
-    case 'success':
-      Haptics.success();
-      break;
-    case 'warning':
-      Haptics.warning();
-      break;
-    case 'error':
-      Haptics.error();
-      break;
-    case 'selection':
-      Haptics.light();
-      break;
+    case 'light': Haptics.light(); break;
+    case 'medium': Haptics.medium(); break;
+    case 'success': Haptics.success(); break;
+    case 'warning': Haptics.warning(); break;
+    case 'error': Haptics.error(); break;
+    case 'selection': Haptics.selection(); break;
     case 'none':
-    default:
-      break;
+    default: break;
   }
 }
 
 export function PressableScale({
   children,
   scaleTo = 0.96,
-  duration = 80,
+  duration = 70,
   haptic = 'none',
   hapticOnPress = true,
   onPressIn,
@@ -69,21 +60,16 @@ export function PressableScale({
 
   const handlePressIn = useCallback(
     (e: any) => {
-      pressed.value = withTiming(1, {
-        duration,
-        easing: Easing.out(Easing.quad),
-      });
+      if (disabled) return;
+      pressed.value = withSpring(1, { damping: 18, stiffness: 320, mass: 0.6 });
       onPressIn?.(e);
     },
-    [duration, onPressIn, pressed],
+    [duration, onPressIn, pressed, disabled],
   );
 
   const handlePressOut = useCallback(
     (e: any) => {
-      pressed.value = withTiming(0, {
-        duration: 140,
-        easing: Easing.out(Easing.quad),
-      });
+      pressed.value = withSpring(0, { damping: 16, stiffness: 220, mass: 0.6 });
       onPressOut?.(e);
     },
     [onPressOut, pressed],
@@ -104,27 +90,23 @@ export function PressableScale({
     };
   });
 
-  const composedStyle = useMemo(
-    () => [style, animatedStyle],
-    [style, animatedStyle],
-  );
-
   return (
-    <AnimatedPressable
-      {...rest}
-      disabled={disabled}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      onPress={handlePress}
-      style={composedStyle as any}
-    >
-      {children}
-    </AnimatedPressable>
+    <Animated.View style={[style, animatedStyle]}>
+      <Pressable
+        {...rest}
+        disabled={disabled}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        onPress={handlePress}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
   );
 }
 
-interface PressableCardProps extends Omit<PressableProps, 'style' | 'children'> {
-  children: ReactNode;
+interface PressableCardProps extends Omit<React.ComponentProps<typeof Pressable>, 'style' | 'children'> {
+  children: React.ReactNode;
   scaleTo?: number;
   haptic?: HapticKind;
   style?: StyleProp<ViewStyle>;
@@ -133,7 +115,7 @@ interface PressableCardProps extends Omit<PressableProps, 'style' | 'children'> 
 
 export function PressableCard({
   children,
-  scaleTo = 0.99,
+  scaleTo = 0.985,
   haptic = 'light',
   style,
   disabled,
@@ -143,15 +125,16 @@ export function PressableCard({
 
   const handlePressIn = useCallback(
     (e: any) => {
-      pressed.value = withTiming(1, { duration: 90, easing: Easing.out(Easing.quad) });
+      if (disabled) return;
+      pressed.value = withSpring(1, { damping: 18, stiffness: 280, mass: 0.7 });
       rest.onPressIn?.(e);
     },
-    [pressed, rest],
+    [pressed, rest, disabled],
   );
 
   const handlePressOut = useCallback(
     (e: any) => {
-      pressed.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.quad) });
+      pressed.value = withSpring(0, { damping: 16, stiffness: 220, mass: 0.7 });
       rest.onPressOut?.(e);
     },
     [pressed, rest],
@@ -168,27 +151,23 @@ export function PressableCard({
   const animatedStyle = useAnimatedStyle(() => {
     const p = pressed.value;
     const scale = 1 - (1 - scaleTo) * p;
-    const shadow = interpolate(p, [0, 1], [8, 4]);
-    const elevation = interpolate(p, [0, 1], [4, 2]);
     return {
       transform: [{ scale }],
-      shadowOpacity: 0.06 + 0.04 * p,
-      shadowRadius: shadow,
-      elevation,
     } as any;
   });
 
   return (
-    <AnimatedPressable
-      {...rest}
-      disabled={disabled}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      onPress={handlePress}
-      style={[style, animatedStyle] as any}
-    >
-      {children}
-    </AnimatedPressable>
+    <Animated.View style={[style, animatedStyle]}>
+      <Pressable
+        {...rest}
+        disabled={disabled}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        onPress={handlePress}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
   );
 }
 

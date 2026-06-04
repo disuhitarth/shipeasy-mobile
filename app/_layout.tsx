@@ -18,6 +18,7 @@ import {
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ToastProvider } from '@/components/ToastProvider';
 import { OfflineBanner } from '@/components/OfflineBanner';
+import { TourProvider } from '@/components/Tour';
 import { initAnalytics, track, page } from '@/lib/analytics';
 import {
   installGlobalErrorHandler,
@@ -153,36 +154,39 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
-            <Boot />
-            <StatusBar style="dark" />
-            <OfflineBanner />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                animation: 'slide_from_right',
-                animationDuration: 280,
-                gestureEnabled: true,
-              }}
-            >
-              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-              <Stack.Screen name="onboarding" options={{ animation: 'fade', gestureEnabled: false }} />
-              <Stack.Screen name="auth/login" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
-              <Stack.Screen name="auth/register" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
-              <Stack.Screen name="wizard" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
-              <Stack.Screen name="batch" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
-              <Stack.Screen name="shipments/[id]" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="skus" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="addresses" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="ship-now" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="wallet/topup" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
-              <Stack.Screen name="wallet/cards" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/personal-details" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/security" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/notifications" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/help" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/appearance" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-              <Stack.Screen name="profile/about" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
-            </Stack>
+            <TourProvider>
+              <Boot />
+              <StatusBar style="dark" />
+              <OfflineBanner />
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  animation: 'slide_from_right',
+                  animationDuration: 280,
+                  gestureEnabled: true,
+                }}
+              >
+                <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+                <Stack.Screen name="onboarding" options={{ animation: 'fade', gestureEnabled: false }} />
+                <Stack.Screen name="auth/login" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
+                <Stack.Screen name="auth/register" options={{ animation: 'slide_from_bottom', animationDuration: 320 }} />
+                <Stack.Screen name="wizard" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+                <Stack.Screen name="batch" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+                <Stack.Screen name="shipments/[id]" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="skus" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="addresses" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="ship-now" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="wallet/topup" options={{ animation: 'slide_from_bottom', animationDuration: 360 }} />
+                <Stack.Screen name="wallet/cards" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/personal-details" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/security" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/notifications" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/help" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/appearance" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="profile/about" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
+                <Stack.Screen name="+not-found" options={{ animation: 'fade', gestureEnabled: false }} />
+              </Stack>
+            </TourProvider>
           </ToastProvider>
         </QueryClientProvider>
       </SafeAreaProvider>

@@ -1,12 +1,12 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, TextInput, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/store/auth';
 import { useWallet } from '@/store/wallet';
 import { useWalletData, useShipments } from '@/lib/queries';
-import { BalanceCard } from '@/components/ui/BalanceCard';
-import { colors, borderRadius, spacing } from '@/lib/theme';
+import { BalanceCard, QuickStatsWidget } from '@/components/BalanceCard';
+import { colors, borderRadius, spacing, shadows, typography } from '@/lib/theme';
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
@@ -14,6 +14,21 @@ import { PressableCard, PressableScale } from '@/components/PressableScale';
 import { toast } from '@/lib/toast';
 import { track } from '@/lib/analytics';
 import * as Haptics from '@/lib/haptics';
+import { QuickCostCalculator } from '@/components/QuickCostCalculator';
+import { ActivityFeed } from '@/components/ActivityFeed';
+import { NewBadge } from '@/components/NewBadge';
+import { useSettings } from '@/store/settings';
+import Animated, {
+  useSharedValue,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  interpolate,
+  Extrapolation,
+  FadeInDown,
+  FadeInUp,
+} from 'react-native-reanimated';
+import { SwipeableRow } from '@/components/SwipeableRow';
+import { BurstRing } from '@/components/ConfettiBurst';
 
 function getInitials(name: string) {
   return name
@@ -43,6 +58,8 @@ export default function HomeScreen() {
   const { data: shipmentsData } = useShipments(1);
   const setBalance = useWallet((s) => s.setBalance);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const shippingGoal = useSettings((s) => s.shippingGoal);
 
   useEffect(() => {
     if (walletData?.balance != null) setBalance(walletData.balance);
@@ -67,15 +84,45 @@ export default function HomeScreen() {
     toast.success('Updated!');
   }, [refetch]);
 
+  const onSearchSubmit = useCallback(() => {
+    if (!searchTerm.trim()) return;
+    router.push({
+      pathname: '/shipments',
+      params: { q: searchTerm },
+    });
+  }, [searchTerm]);
+
   const userName = user?.name ?? 'Guest';
   const initials = user?.name ? getInitials(user.name) : 'G';
   const balance = walletData?.balance ?? 0;
   const recentShipments = shipmentsData?.shipments?.slice(0, 3) ?? [];
 
+  const greeting = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 18) return 'Good afternoon';
+    return 'Good evening';
+  })();
+
+  const goalTip = (() => {
+    switch (shippingGoal) {
+      case 'daily':
+        return 'Daily shipper · Tip: keep SKUs handy for repeat labels.';
+      case 'weekly':
+        return 'Weekly shipper · Tip: bulk send with Magic Batch to save time.';
+      case 'monthly':
+        return 'Monthly shipper · Tip: top up your wallet to skip re-auth.';
+      case 'occasionally':
+        return 'Occasional shipper · Tip: track your last shipment in one tap.';
+      default:
+        return 'Welcome! Set a shipping goal to personalise tips.';
+    }
+  })();
+
   const quickActions = [
     { icon: 'cube' as const, label: 'Ship a package', route: '/wizard', primary: true },
     { icon: 'search' as const, label: 'Track', route: '/shipments', primary: false },
-    { icon: 'sparkles' as const, label: 'Magic Batch', route: '/batch', primary: false },
+    { icon: 'sparkles' as const, label: 'Magic Batch', route: '/batch', primary: false, badge: true },
     { icon: 'location' as const, label: 'Addresses', route: '/addresses', primary: false },
   ];
 
@@ -128,6 +175,7 @@ export default function HomeScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
         }
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <StaggeredItem index={0}>
           <View style={styles.header}>
@@ -142,7 +190,7 @@ export default function HomeScreen() {
                 <Text style={styles.avatarText}>{initials}</Text>
               </View>
               <View>
-                <Text style={styles.greeting}>Good morning</Text>
+                <Text style={styles.greeting}>{greeting}</Text>
                 <Text style={styles.userName}>{userName}</Text>
               </View>
             </View>
@@ -158,29 +206,81 @@ export default function HomeScreen() {
         </StaggeredItem>
 
         <StaggeredItem index={1}>
-          <BalanceCard balance={balance} onAdd={() => router.push('/wallet')} />
+          <View style={styles.searchWrap}>
+            <TouchableOpacity
+              style={styles.searchBar}
+              activeOpacity={0.85}
+              onPress={() => router.push('/shipments')}
+            >
+              <Ionicons name="search" size={18} color={colors.faint} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search shipments, recipients…"
+                placeholderTextColor={colors.faint}
+                value={searchTerm}
+                onChangeText={setSearchTerm}
+                onSubmitEditing={onSearchSubmit}
+                returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="none"
+                pointerEvents="none"
+              />
+              {searchTerm.length > 0 ? (
+                <TouchableOpacity
+                  onPress={() => setSearchTerm('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={18} color={colors.faint} />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.searchHint}>
+                  <Text style={styles.searchHintText}>Tap to search</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </StaggeredItem>
 
         <StaggeredItem index={2}>
+          <BalanceCard balance={balance} onAdd={() => router.push('/wallet')} />
+        </StaggeredItem>
+
+        <StaggeredItem index={3}>
+          <View style={styles.tipCard}>
+            <View style={styles.tipIcon}>
+              <Ionicons name="bulb-outline" size={14} color={colors.accent} />
+            </View>
+            <Text style={styles.tipText}>{goalTip}</Text>
+          </View>
+        </StaggeredItem>
+
+        <StaggeredItem index={4}>
           <View style={styles.qaGrid}>
             {quickActions.map((qa) => (
               <PressableCard
                 key={qa.label}
                 style={[styles.qaItem, qa.primary && styles.qaPrimary]}
-                onPress={() => router.push(qa.route)}
+                onPress={() => router.push(qa.route as any)}
                 haptic="light"
                 scaleTo={0.96}
               >
                 <View style={[styles.qaIcon, qa.primary && styles.qaIconPrimary]}>
                   <Ionicons name={qa.icon} size={21} color={qa.primary ? '#fff' : colors.accent} />
                 </View>
-                <Text style={[styles.qaLabel, qa.primary && { color: '#fff' }]}>{qa.label}</Text>
+                <Text style={[styles.qaLabel, qa.primary && { color: '#fff' }]}>
+                  {qa.label}
+                </Text>
+                {qa.badge ? (
+                  <View style={styles.qaBadge}>
+                    <NewBadge id="feature-magic-batch" />
+                  </View>
+                ) : null}
               </PressableCard>
             ))}
           </View>
         </StaggeredItem>
 
-        <StaggeredItem index={3}>
+        <StaggeredItem index={5}>
           <PressableCard
             style={styles.batchPromo}
             onPress={() => router.push('/batch')}
@@ -196,7 +296,10 @@ export default function HomeScreen() {
               <Ionicons name="sparkles" size={20} color="#fff" />
             </View>
             <View style={styles.batchText}>
-              <Text style={styles.batchTitle}>Ship in bulk with Magic Batch</Text>
+              <View style={styles.batchTitleRow}>
+                <Text style={styles.batchTitle}>Ship in bulk with Magic Batch</Text>
+                <NewBadge id="feature-magic-batch" />
+              </View>
               <Text style={styles.batchSub}>
                 Paste a list or scan a photo — AI does the rest
               </Text>
@@ -205,9 +308,17 @@ export default function HomeScreen() {
           </PressableCard>
         </StaggeredItem>
 
+        <StaggeredItem index={6}>
+          <QuickCostCalculator />
+        </StaggeredItem>
+
+        <StaggeredItem index={7}>
+          <ActivityFeed />
+        </StaggeredItem>
+
         {recentShipments.length > 0 && (
           <>
-            <StaggeredItem index={4}>
+            <StaggeredItem index={8}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Recent shipments</Text>
                 <PressableScale
@@ -221,7 +332,7 @@ export default function HomeScreen() {
             </StaggeredItem>
             <View style={styles.group}>
               {recentShipments.map((s, i) => (
-                <StaggeredItem key={s._id} index={5 + i} delayStep={50}>
+                <StaggeredItem key={s._id} index={9 + i} delayStep={50}>
                   <PressableCard
                     style={[styles.shipmentCell, i > 0 && styles.shipmentCellBorder]}
                     onPress={() => router.push(`/shipments/${s.shipCode}`)}
@@ -329,6 +440,60 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.surface,
   },
+  searchWrap: {
+    marginBottom: spacing.lg,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    height: 50,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.lg,
+    ...shadows.sm,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: colors.ink,
+    padding: 0,
+  },
+  searchHint: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: colors.surface2,
+    borderRadius: 100,
+  },
+  searchHintText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.faint,
+  },
+  tipCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.accentSoft,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginTop: spacing.md,
+  },
+  tipIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tipText: {
+    flex: 1,
+    fontSize: 12.5,
+    color: colors.accent,
+    fontWeight: '500',
+  },
   qaGrid: {
     flexDirection: 'row',
     gap: 10,
@@ -347,6 +512,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 1,
     shadowRadius: 2,
     elevation: 1,
+    position: 'relative',
   },
   qaPrimary: {
     backgroundColor: colors.accent,
@@ -366,6 +532,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: colors.ink,
+  },
+  qaBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
   },
   batchPromo: {
     flexDirection: 'row',
@@ -391,6 +562,12 @@ const styles = StyleSheet.create({
   },
   batchText: {
     flex: 1,
+  },
+  batchTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
   },
   batchTitle: {
     fontSize: 15,

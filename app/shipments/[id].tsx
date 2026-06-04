@@ -25,6 +25,8 @@ import type { TrackingEvent } from '@/types';
 import { preventCapture, allowCapture } from '@/lib/screenCapture';
 import { copySensitive } from '@/lib/clipboard';
 import { toast } from '@/lib/toast';
+import { LocalStore, SHIPMENT_TAGS, type ShippingTag } from '@/lib/localStore';
+import { downloadReceipt } from '@/lib/receipts';
 
 const CAN_VOID = ['label-created', 'pending'];
 const SUPPORT_EMAIL = 'support@shipeasycanada.com';
@@ -70,6 +72,10 @@ export default function ShipmentDetailScreen() {
   } = useTrackingPolling({ shipCode: id, intervalMs: 30_000 });
   const voidShipment = useVoidShipment();
   const [sharing, setSharing] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [note, setNote] = useState('');
+  const [tags, setTags] = useState<ShippingTag[]>([]);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [, setNow] = useState<number>(Date.now());
   const insets = useSafeAreaInsets();
   const lastStatusRef = useRef<string | null>(null);
@@ -109,6 +115,24 @@ export default function ShipmentDetailScreen() {
 
   useEffect(() => {
     void track('screen_view', { screen: 'shipment_detail', shipCode: id });
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    let alive = true;
+    Promise.all([
+      LocalStore.getPinned(),
+      LocalStore.getShipmentNote(id),
+      LocalStore.getShipmentTags(id),
+    ]).then(([p, n, t]) => {
+      if (!alive) return;
+      setPinned(p.includes(id));
+      setNote(n);
+      setTags(t);
+    });
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   useFocusEffect(

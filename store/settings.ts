@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import type { ShippingGoal } from '@/lib/localStore';
 
 const KEY_PREFS = 'notification_prefs';
 const KEY_APPEAR = 'appearance_prefs';
 const KEY_ONBOARD = 'has_onboarded';
 const KEY_LAST_VERSION = 'last_seen_version';
+const KEY_SHIPPING_GOAL = 'shipping_goal_v1';
 
 export interface NotificationPrefs {
   push: boolean;
@@ -96,12 +98,14 @@ interface SettingsState {
   appearancePrefs: AppearancePrefs;
   hasOnboarded: boolean;
   lastSeenVersion: string | null;
+  shippingGoal: ShippingGoal | null;
   loaded: boolean;
   load: () => Promise<void>;
   setNotificationPref: (key: keyof NotificationPrefs, value: boolean) => Promise<void>;
   setAppearancePref: <K extends keyof AppearancePrefs>(key: K, value: AppearancePrefs[K]) => Promise<void>;
   setOnboarded: (value: boolean) => Promise<void>;
   setLastSeenVersion: (version: string) => Promise<void>;
+  setShippingGoal: (goal: ShippingGoal | null) => Promise<void>;
 }
 
 export const useSettings = create<SettingsState>((set) => ({
@@ -109,20 +113,23 @@ export const useSettings = create<SettingsState>((set) => ({
   appearancePrefs: DEFAULT_APPEAR,
   hasOnboarded: false,
   lastSeenVersion: null,
+  shippingGoal: null,
   loaded: false,
 
   load: async () => {
-    const [n, a, onboarded, version] = await Promise.all([
+    const [n, a, onboarded, version, goal] = await Promise.all([
       readJSON<NotificationPrefs>(KEY_PREFS, DEFAULT_PREFS),
       readJSON<AppearancePrefs>(KEY_APPEAR, DEFAULT_APPEAR),
       readFlag(KEY_ONBOARD),
       readString(KEY_LAST_VERSION),
+      readJSON<{ goal: ShippingGoal | null }>(KEY_SHIPPING_GOAL, { goal: null }),
     ]);
     set({
       notificationPrefs: n,
       appearancePrefs: a,
       hasOnboarded: onboarded,
       lastSeenVersion: version,
+      shippingGoal: goal.goal,
       loaded: true,
     });
   },
@@ -151,5 +158,10 @@ export const useSettings = create<SettingsState>((set) => ({
   setLastSeenVersion: async (version) => {
     set({ lastSeenVersion: version });
     await writeString(KEY_LAST_VERSION, version);
+  },
+
+  setShippingGoal: async (goal) => {
+    set({ shippingGoal: goal });
+    await writeJSON(KEY_SHIPPING_GOAL, { goal });
   },
 }));

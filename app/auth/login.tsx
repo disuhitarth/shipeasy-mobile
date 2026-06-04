@@ -111,7 +111,9 @@ export default function LoginScreen() {
       }
       Haptics.success();
       toast.success('Welcome back');
-      router.back();
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 150);
     } catch (e: any) {
       const result = await recordFailedLogin();
       setRemainingAttempts(LOGIN_MAX_ATTEMPTS - result.attempts);
@@ -144,7 +146,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Animated.View entering={FadeInDown.duration(360)} style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <PressableScale style={styles.backBtn} onPress={() => router.back()} haptic="light">
+        <PressableScale style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }} haptic="light">
           <Ionicons name="chevron-back" size={24} color={colors.ink} />
         </PressableScale>
       </Animated.View>
@@ -241,7 +243,7 @@ export default function LoginScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInUp.duration(360).delay(400)}>
-          <PressableScale style={styles.guestBtn} onPress={() => { enableGuest(); router.back(); }} haptic="light" disabled={loading}>
+          <PressableScale style={styles.guestBtn} onPress={() => { enableGuest(); router.replace('/(tabs)'); }} haptic="light" disabled={loading}>
             <Text style={styles.guestText}>Continue as guest</Text>
           </PressableScale>
         </Animated.View>

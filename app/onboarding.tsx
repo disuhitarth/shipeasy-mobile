@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSettings } from '@/store/settings';
+import type { ShippingGoal } from '@/lib/localStore';
 import { colors, borderRadius, spacing } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import { track, page } from '@/lib/analytics';
@@ -38,12 +39,28 @@ const SLIDES: Slide[] = [
   },
 ];
 
+interface GoalOption {
+  id: ShippingGoal;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  description: string;
+}
+
+const GOAL_OPTIONS: GoalOption[] = [
+  { id: 'daily', label: 'Daily', icon: 'flash', description: 'I ship every day' },
+  { id: 'weekly', label: 'Weekly', icon: 'calendar', description: 'A few times a week' },
+  { id: 'monthly', label: 'Monthly', icon: 'calendar-outline', description: 'Once or twice a month' },
+  { id: 'occasionally', label: 'Occasionally', icon: 'rocket-outline', description: 'Just once in a while' },
+];
+
 const { width } = Dimensions.get('window');
 
 export default function OnboardingScreen() {
   const [index, setIndex] = useState(0);
+  const [goal, setGoal] = useState<ShippingGoal | null>(null);
   const setOnboarded = useSettings((s) => s.setOnboarded);
   const setLastSeenVersion = useSettings((s) => s.setLastSeenVersion);
+  const setShippingGoal = useSettings((s) => s.setShippingGoal);
   const insets = useSafeAreaInsets();
   const fade = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -53,29 +70,35 @@ export default function OnboardingScreen() {
     (Constants.expoConfig as any)?.android?.versionCode ??
     '1';
 
-  const slide = SLIDES[index];
-  const isLast = index === SLIDES.length - 1;
+  const isGoalStep = index === SLIDES.length;
+  const isLast = isGoalStep;
+  const slide = isGoalStep ? null : SLIDES[index];
 
   useEffect(() => {
-    void page('onboarding', { slide: index, total: SLIDES.length });
+    void page('onboarding', { slide: index, total: SLIDES.length + 1 });
     fade.setValue(0);
     translateX.setValue(index === 0 ? 20 : -20);
     Animated.parallel([
       Animated.timing(fade, { toValue: 1, duration: 350, useNativeDriver: true }),
       Animated.timing(translateX, { toValue: 0, duration: 350, useNativeDriver: true }),
     ]).start();
-  }, [index]);
+  }, [index, fade, translateX]);
 
   const finish = async () => {
+    if (goal) await setShippingGoal(goal);
     await setOnboarded(true);
     const version = appVersion;
     await setLastSeenVersion(version);
-    void track('app_open', { source: 'onboarding_finished', version });
+    void track('app_open', { source: 'onboarding_finished', version, shippingGoal: goal });
     router.replace('/(tabs)');
   };
 
   const next = () => {
     if (isLast) {
+      if (!goal) {
+        toast.error('Pick a goal to personalise your home screen');
+        return;
+      }
       finish();
     } else {
       setIndex((i) => i + 1);
@@ -105,34 +128,73 @@ export default function OnboardingScreen() {
         )}
       </View>
 
-      <View style={styles.illustration}>
-        <Animated.View
-          style={{
-            opacity: fade,
-            transform: [{ translateX }],
-            alignItems: 'center',
-          }}
-        >
-          <LinearGradient
-            colors={slide.gradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.iconCircle}
-          >
-            <Ionicons name={slide.icon} size={64} color={colors.white} />
-          </LinearGradient>
-        </Animated.View>
-      </View>
+      {!isGoalStep ? (
+        <>
+          <View style={styles.illustration}>
+            <Animated.View
+              style={{
+                opacity: fade,
+                transform: [{ translateX }],
+                alignItems: 'center',
+              }}
+            >
+              <LinearGradient
+                colors={slide!.gradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.iconCircle}
+              >
+                <Ionicons name={slide!.icon} size={64} color={colors.white} />
+              </LinearGradient>
+            </Animated.View>
+          </View>
 
-      <View style={styles.textBlock}>
-        <Animated.View style={{ opacity: fade, transform: [{ translateX }] }}>
-          <Text style={styles.title}>{slide.title}</Text>
-          <Text style={styles.subtitle}>{slide.subtitle}</Text>
-        </Animated.View>
-      </View>
+          <View style={styles.textBlock}>
+            <Animated.View style={{ opacity: fade, transform: [{ translateX }] }}>
+              <Text style={styles.title}>{slide!.title}</Text>
+              <Text style={styles.subtitle}>{slide!.subtitle}</Text>
+            </Animated.View>
+          </View>
+        </>
+      ) : (
+        <View style={styles.goalBlock}>
+          <View style={styles.goalHeader}>
+            <Ionicons name="rocket" size={36} color={colors.accent} />
+            <Text style={styles.title}>What's your shipping goal?</Text>
+            <Text style={styles.subtitle}>
+              We'll personalise your home screen with tips and shortcuts that match your pace.
+            </Text>
+          </View>
+          <View style={styles.goalGrid}>
+            {GOAL_OPTIONS.map((opt) => {
+              const selected = goal === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  activeOpacity={0.85}
+                  style={[styles.goalCard, selected && styles.goalCardActive]}
+                  onPress={() => {
+                    setGoal(opt.id);
+                  }}
+                >
+                  <View style={[styles.goalIcon, selected && styles.goalIconActive]}>
+                    <Ionicons name={opt.icon} size={22} color={selected ? '#fff' : colors.accent} />
+                  </View>
+                  <Text style={[styles.goalLabel, selected && styles.goalLabelActive]}>
+                    {opt.label}
+                  </Text>
+                  <Text style={[styles.goalDesc, selected && styles.goalDescActive]}>
+                    {opt.description}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
 
       <View style={styles.dots}>
-        {SLIDES.map((_, i) => (
+        {[...SLIDES, { title: 'goal' }].map((_, i) => (
           <View
             key={i}
             style={[
@@ -145,9 +207,19 @@ export default function OnboardingScreen() {
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.xl }]}>
         <TouchableOpacity
-          style={[styles.cta, { backgroundColor: slide.gradient[1] }]}
+          style={[
+            styles.cta,
+            {
+              backgroundColor: isLast
+                ? goal
+                  ? colors.accent
+                  : colors.faint
+                : (slide?.gradient[1] ?? colors.accent),
+            },
+          ]}
           onPress={next}
           activeOpacity={0.9}
+          disabled={isLast && !goal}
         >
           <Text style={styles.ctaText}>{isLast ? 'Get started' : 'Next'}</Text>
           <Ionicons
@@ -226,19 +298,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '700',
     color: colors.ink,
     textAlign: 'center',
-    letterSpacing: -0.8,
+    letterSpacing: -0.7,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 15.5,
     color: colors.muted,
     textAlign: 'center',
     lineHeight: 22,
     marginTop: spacing.sm,
-    maxWidth: 320,
+    maxWidth: 340,
   },
   dots: {
     flexDirection: 'row',
@@ -285,4 +357,63 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.faint,
   },
+  goalBlock: {
+    flex: 1.2,
+    justifyContent: 'center',
+  },
+  goalHeader: {
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing.xl,
+  },
+  goalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  goalCard: {
+    width: '47%',
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    borderRadius: 22,
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  goalCardActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  goalIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  goalIconActive: {
+    backgroundColor: colors.accent,
+  },
+  goalLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.ink,
+  },
+  goalLabelActive: {
+    color: colors.accent,
+  },
+  goalDesc: {
+    fontSize: 12,
+    color: colors.muted,
+    textAlign: 'center',
+  },
+  goalDescActive: {
+    color: colors.accent,
+    opacity: 0.7,
+  },
 });
+
+void width;

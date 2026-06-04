@@ -69,10 +69,11 @@ export const useAuth = create<AuthState>((set) => ({
   login: async (email: string, password: string) => {
     const res = await api.post('/auth/mobile-login', { email, password });
     const { token, user } = res.data;
+    const normalized: User = { ...user, _id: user._id || user.id };
     await setToken(token);
-    set({ user, isAuthenticated: true, isGuest: false });
-    setErrorUserId(user?._id);
-    identify(user?._id ?? 'unknown', { email: user?.email, name: user?.name });
+    set({ user: normalized, isAuthenticated: true, isGuest: false });
+    setErrorUserId(normalized._id);
+    identify(normalized._id ?? 'unknown', { email: normalized?.email, name: normalized?.name });
     void track('user_login', { method: 'password' });
   },
 
@@ -80,10 +81,11 @@ export const useAuth = create<AuthState>((set) => ({
     await api.post('/auth/register', { name, email, password });
     const res = await api.post('/auth/mobile-login', { email, password });
     const { token, user } = res.data;
+    const normalized: User = { ...user, _id: user._id || user.id };
     await setToken(token);
-    set({ user, isAuthenticated: true, isGuest: false });
-    setErrorUserId(user?._id);
-    identify(user?._id ?? 'unknown', { email: user?.email, name: user?.name });
+    set({ user: normalized, isAuthenticated: true, isGuest: false });
+    setErrorUserId(normalized._id);
+    identify(normalized._id ?? 'unknown', { email: normalized?.email, name: normalized?.name });
     void track('user_register', { method: 'password' });
   },
 
@@ -106,7 +108,8 @@ export const useAuth = create<AuthState>((set) => ({
         return set({ isLoading: false, isGuest: true });
       }
       const res = await api.get('/auth/me');
-      const user = res.data.user;
+      const raw = res.data.user;
+      const user: User = { ...raw, _id: raw._id || raw.id };
       set({
         user,
         isAuthenticated: true,
