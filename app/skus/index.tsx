@@ -6,10 +6,12 @@ import type { TextInput as RNTextInput } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSKUs, useCreateSKU, useUpdateSKU, useDeleteSKU } from '@/lib/queries';
+import { track } from '@/lib/analytics';
 import type { SKU } from '@/types';
 import { colors, spacing, borderRadius } from '@/lib/theme';
 import { validateRequired, validateHSCode, validateAmount, validateForm, type ValidationResult } from '@/lib/validation';
 import { toast } from '@/lib/toast';
+import { useDebounce } from '@/lib/useDebounce';
 import { FormField } from '@/components/ui/FormField';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { Sheet } from '@/components/Sheet';
@@ -41,9 +43,10 @@ export default function SKUsScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    Haptics.medium();
+    Haptics.selection();
     await refetch();
     setRefreshing(false);
+    toast.success('Updated!');
   }, [refetch]);
 
   const createSku = useCreateSKU();
@@ -51,6 +54,8 @@ export default function SKUsScreen() {
   const deleteSku = useDeleteSKU();
 
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, 300);
+  const isDebouncing = search !== debouncedSearch;
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormShape>(EMPTY_FORM);
@@ -93,11 +98,17 @@ export default function SKUsScreen() {
 
   const filtered = useMemo(() => {
     if (!skus) return [];
-    const q = search.toLowerCase();
+    const q = debouncedSearch.toLowerCase().trim();
+    if (!q) return skus;
     return skus.filter(
-      (s) => s.sku.toLowerCase().includes(q) || s.name.toLowerCase().includes(q),
+      (s) => s.sku.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q),
     );
-  }, [skus, search]);
+  }, [skus, debouncedSearch]);
+
+  const clearSearch = useCallback(() => {
+    Haptics.light();
+    setSearch('');
+  }, []);
 
   const openCreate = useCallback(() => {
     setEditId(null);
@@ -197,6 +208,7 @@ export default function SKUsScreen() {
       } else {
         await createSku.mutateAsync(payload);
         Haptics.success();
+        void track('sku_added', { hsCode: payload.hsCode });
         toast.success('SKU created');
       }
       setModal(false);
@@ -237,7 +249,16 @@ export default function SKUsScreen() {
               placeholderTextColor={colors.faint}
               value={search}
               onChangeText={setSearch}
+              autoCorrect={false}
+              autoCapitalize="none"
             />
+            {isDebouncing ? (
+              <ActivityIndicator size="small" color={colors.faint} />
+            ) : search.length > 0 ? (
+              <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close-circle" size={18} color={colors.faint} />
+              </TouchableOpacity>
+            ) : null}
           </View>
         </Animated.View>
 
@@ -247,14 +268,23 @@ export default function SKUsScreen() {
           </View>
         ) : filtered.length === 0 ? (
           <Animated.View entering={FadeInDown.duration(420)} style={styles.center}>
-            <Ionicons name="pricetags-outline" size={64} color={colors.accentSoft} />
+            <Ionicons
+              name={debouncedSearch ? 'search-outline' : 'pricetags-outline'}
+              size={64}
+              color={colors.accentSoft}
+            />
             <Text style={styles.emptyText}>
-              {search ? 'No matching SKUs' : 'No SKUs yet'}
+              {debouncedSearch ? `No results for "${debouncedSearch}"` : 'No SKUs yet'}
             </Text>
             <Text style={styles.emptySub}>
-              {search ? 'Try a different search' : 'Create your first product preset'}
+              {debouncedSearch ? 'Try a different search' : 'Create your first product preset'}
             </Text>
-            {!search && (
+            {debouncedSearch ? (
+              <PressableScale style={styles.emptyBtn} onPress={clearSearch} haptic="light">
+                <Ionicons name="close-circle" size={16} color={colors.white} />
+                <Text style={styles.emptyBtnText}>Clear search</Text>
+              </PressableScale>
+            ) : (
               <PressableScale style={styles.emptyBtn} onPress={openCreate} haptic="light">
                 <Ionicons name="add" size={18} color={colors.white} />
                 <Text style={styles.emptyBtnText}>Create SKU</Text>

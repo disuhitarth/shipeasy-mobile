@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router';
+import { Tabs, usePathname } from 'expo-router';
 import { View, Text, StyleSheet, type ColorValue } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect } from 'react';
@@ -10,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { colors } from '@/lib/theme';
+import { page } from '@/lib/analytics';
 import * as Haptics from '@/lib/haptics';
 
 interface BouncingIconProps {
@@ -83,6 +84,12 @@ function FabButton({ focused }: FabButtonProps) {
 }
 
 export default function TabLayout() {
+  const pathname = usePathname();
+  useEffect(() => {
+    const screen = pathname?.replace(/^\//, '').replace(/\/.*$/, '') || 'home';
+    void page(`tabs/${screen}`);
+  }, [pathname]);
+
   return (
     <Tabs
       screenOptions={{

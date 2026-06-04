@@ -10,6 +10,7 @@ import { useWallet } from '@/store/wallet';
 import { useGetRates, useCreateShipment } from '@/lib/queries';
 import api from '@/lib/api';
 import { bytesToBase64 } from '@/lib/base64';
+import { track } from '@/lib/analytics';
 import { StepAddress, type StepAddressRef } from '@/components/wizard/StepAddress';
 import { StepPackage, type StepPackageRef } from '@/components/wizard/StepPackage';
 import { StepCustoms, type StepCustomsRef } from '@/components/wizard/StepCustoms';
@@ -180,6 +181,12 @@ export default function WizardScreen() {
         deduct(ship.customerTotal || 0);
         Haptics.success();
         setDone({ id: ship.shipCode, price: ship.customerTotal });
+        void track('shipment_created', {
+          shipCode: ship.shipCode,
+          total: ship.customerTotal,
+          service: ship.service,
+          country: ship.recipientCountryCode,
+        });
         toast.success('Shipment purchased');
       } catch (e: any) {
         setBuying(false);

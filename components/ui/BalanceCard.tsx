@@ -6,12 +6,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 interface BalanceCardProps {
   balance: number;
   onAdd?: () => void;
+  onCopyBalance?: () => void;
   style?: ViewStyle;
 }
 
 function fw(w: string): any { return w; }
 
-export function BalanceCard({ balance, onAdd, style }: BalanceCardProps) {
+export function BalanceCard({ balance, onAdd, onCopyBalance, style }: BalanceCardProps) {
   return (
     <View style={[styles.card, style]}>
       <LinearGradient
@@ -22,10 +23,19 @@ export function BalanceCard({ balance, onAdd, style }: BalanceCardProps) {
       />
       <View style={styles.glow} />
       <View style={styles.content}>
-        <View>
-          <Text style={styles.eyebrow}>Wallet balance</Text>
-          <Text style={styles.balance}>${balance.toFixed(2)}</Text>
-        </View>
+        <TouchableOpacity
+          activeOpacity={onCopyBalance ? 0.7 : 1}
+          onPress={onCopyBalance}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+        >
+          <View>
+            <Text style={styles.eyebrow}>Wallet balance</Text>
+            <Text style={styles.balance}>${balance.toFixed(2)}</Text>
+          </View>
+          {onCopyBalance && (
+            <Ionicons name="copy-outline" size={16} color="rgba(255,255,255,0.7)" />
+          )}
+        </TouchableOpacity>
         {onAdd && (
           <TouchableOpacity style={styles.addBtn} onPress={onAdd} activeOpacity={0.7}>
             <Ionicons name="add" size={22} color="#fff" />

@@ -17,8 +17,21 @@ import {
 } from '@/lib/notifications';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ToastProvider } from '@/components/ToastProvider';
+import { OfflineBanner } from '@/components/OfflineBanner';
+import { initAnalytics, track, page } from '@/lib/analytics';
+import {
+  installGlobalErrorHandler,
+  setErrorUserId,
+  reportError,
+} from '@/lib/errorReporting';
+import { startConnectionMonitor } from '@/lib/connection';
+import { startAutoLock, stopAutoLock } from '@/lib/autoLock';
+import { startSessionTimeout, stopSessionTimeout } from '@/lib/sessionTimeout';
 
 setupForegroundHandler();
+installGlobalErrorHandler();
+startConnectionMonitor();
+initAnalytics().catch(() => {});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,22 +47,38 @@ setQueryClientRef(queryClient);
 
 function Boot() {
   const loadToken = useAuth((s) => s.loadToken);
+  const user = useAuth((s) => s.user);
   const loadBiometric = useBiometric((s) => s.load);
   const loadSettings = useSettings((s) => s.load);
   const settingsLoaded = useSettings((s) => s.loaded);
   const hasOnboarded = useSettings((s) => s.hasOnboarded);
   const notificationResp = useRef<Notifications.EventSubscription | null>(null);
   const didRoute = useRef(false);
+  const didTrackOpen = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      await loadToken();
+      try {
+        await loadToken();
+      } catch (err) {
+        void reportError(err, { action: 'loadToken' });
+      }
       if (cancelled) return;
+      try {
+        await track('app_open', {
+          platform: Platform.OS,
+          version: (require('expo-constants') as any).default?.expoConfig?.version,
+        });
+      } catch {}
       if (Platform.OS !== 'web') {
-        const token = await getExpoPushToken();
-        if (!cancelled && token) registerPushToken(token);
+        try {
+          const token = await getExpoPushToken();
+          if (!cancelled && token) await registerPushToken(token);
+        } catch (err) {
+          void reportError(err, { action: 'getExpoPushToken' });
+        }
       }
     })();
 
@@ -67,11 +96,28 @@ function Boot() {
       );
     }
 
+    const stopAuto = startAutoLock();
+    const stopSession = startSessionTimeout(() => {
+      void track('session_timeout', {});
+    });
+
     return () => {
       cancelled = true;
       notificationResp.current?.remove();
+      stopAuto();
+      stopSession();
+      stopAutoLock();
+      stopSessionTimeout();
     };
   }, []);
+
+  useEffect(() => {
+    if (user?._id) {
+      setErrorUserId(user._id);
+    } else {
+      setErrorUserId(undefined);
+    }
+  }, [user?._id]);
 
   useEffect(() => {
     if (settingsLoaded && !didRoute.current) {
@@ -81,6 +127,13 @@ function Boot() {
       }
     }
   }, [settingsLoaded, hasOnboarded]);
+
+  useEffect(() => {
+    if (!didTrackOpen.current) {
+      didTrackOpen.current = true;
+      void track('app_open', { source: 'mount' });
+    }
+  }, []);
 
   return null;
 }
@@ -102,6 +155,7 @@ export default function RootLayout() {
           <ToastProvider>
             <Boot />
             <StatusBar style="dark" />
+            <OfflineBanner />
             <Stack
               screenOptions={{
                 headerShown: false,

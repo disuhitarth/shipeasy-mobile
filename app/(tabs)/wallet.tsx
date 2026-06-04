@@ -1,10 +1,10 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useState, useCallback, useEffect } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useWalletData } from '@/lib/queries';
+import { useWalletData, useInfiniteWalletTransactions, type InfiniteWalletTxResult } from '@/lib/queries';
 import { useBiometric } from '@/store/biometric';
 import { useWallet } from '@/store/wallet';
 import { BalanceCard } from '@/components/ui/BalanceCard';
@@ -14,7 +14,11 @@ import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { PressableScale } from '@/components/PressableScale';
 import { colors, borderRadius, spacing } from '@/lib/theme';
+import { toast } from '@/lib/toast';
 import * as Haptics from '@/lib/haptics';
+import type { Transaction } from '@/types';
+import { preventCapture, allowCapture } from '@/lib/screenCapture';
+import { copySensitive } from '@/lib/clipboard';
 
 const TX_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }> = {
   deposit: { icon: 'arrow-up', color: colors.green, bg: colors.greenSoft },
@@ -40,51 +44,175 @@ function calcStats(transactions: { type: string; amount: number }[]) {
   return { shipped, saved, loaded };
 }
 
+function TransactionRow({ tx, index }: { tx: Transaction; index: number }) {
+  const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: colors.faint, bg: colors.surface2 };
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(360).delay(Math.min(index, 12) * 50)}
+      layout={LinearTransition.springify().damping(20).stiffness(220)}
+    >
+      <TouchableOpacity style={styles.txRow} activeOpacity={0.6}>
+        <View style={[styles.txIcon, { backgroundColor: meta.bg }]}>
+          <Ionicons name={meta.icon} size={18} color={meta.color} />
+        </View>
+        <View style={styles.txInfo}>
+          <Text style={styles.txLabel} numberOfLines={1}>{tx.description}</Text>
+          <Text style={styles.txDate}>{formatDate(tx.createdAt)}</Text>
+        </View>
+        <Text style={[styles.txAmount, { color: tx.amount > 0 ? colors.green : colors.ink }]}>
+          {tx.amount > 0 ? '+' : ''}${Math.abs(tx.amount).toFixed(2)}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+function TransactionList({ txQuery }: { txQuery: InfiniteWalletTxResult }) {
+  const transactions = useMemo(
+    () => (txQuery.data?.pages.flatMap((p) => p.transactions) ?? []),
+    [txQuery.data],
+  );
+
+  const onEndReached = useCallback(() => {
+    if (txQuery.hasNextPage && !txQuery.isFetchingNextPage) {
+      txQuery.fetchNextPage();
+    }
+  }, [txQuery.hasNextPage, txQuery.isFetchingNextPage, txQuery]);
+
+  if (txQuery.isLoading) {
+    return (
+      <View style={{ marginTop: spacing.md }}>
+        <Skeleton height={56} radius={borderRadius.md} />
+        <View style={{ height: 1 }} />
+        <Skeleton height={56} radius={borderRadius.md} style={{ marginTop: 1 }} />
+        <View style={{ height: 1 }} />
+        <Skeleton height={56} radius={borderRadius.md} style={{ marginTop: 1 }} />
+      </View>
+    );
+  }
+
+  if (transactions.length === 0) {
+    return (
+      <Animated.View entering={FadeInDown.duration(420).delay(220)} style={styles.emptyState}>
+        <View style={styles.emptyIcon}>
+          <Ionicons name="wallet-outline" size={28} color={colors.faint} />
+        </View>
+        <Text style={styles.emptyTitle}>No activity yet</Text>
+        <Text style={styles.emptySub}>Your transactions will appear here</Text>
+      </Animated.View>
+    );
+  }
+
+  return (
+    <Group>
+      <FlatList
+        data={transactions}
+        keyExtractor={(item, idx) => item._id || String(idx)}
+        scrollEnabled={false}
+        renderItem={({ item, index }) => <TransactionRow tx={item} index={index} />}
+        ItemSeparatorComponent={() => <View style={styles.txSeparator} />}
+        onEndReached={onEndReached}
+        onEndReachedThreshold={0.4}
+        ListFooterComponent={
+          txQuery.isFetchingNextPage ? (
+            <View style={styles.footerLoader}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.footerLoaderText}>Loading more…</Text>
+            </View>
+          ) : !txQuery.hasNextPage ? (
+            <View style={styles.endOfList}>
+              <Ionicons name="checkmark-circle-outline" size={16} color={colors.faint} />
+              <Text style={styles.endOfListText}>End of list</Text>
+            </View>
+          ) : null
+        }
+      />
+    </Group>
+  );
+}
+
 export default function WalletScreen() {
   const { data, isLoading, refetch } = useWalletData();
+  const txQuery = useInfiniteWalletTransactions();
   const setBalance = useWallet((s) => s.setBalance);
   const biometricEnabled = useBiometric((s) => s.enabled);
-  const biometricLocked = useBiometric((s) => s.locked);
-  const unlock = useBiometric((s) => s.unlock);
+  const markUnlocked = useBiometric((s) => s.markUnlocked);
   const [refreshing, setRefreshing] = useState(false);
   const [authing, setAuthing] = useState(false);
+  const [requireAuth, setRequireAuth] = useState(false);
+  const lastAuthAttempt = useRef(0);
 
   useEffect(() => {
     if (data?.balance != null) setBalance(data.balance);
   }, [data?.balance, setBalance]);
 
   useEffect(() => {
-    if (biometricEnabled && biometricLocked && !authing) {
+    if (!biometricEnabled) {
+      setRequireAuth(false);
+      return;
+    }
+    setRequireAuth(useBiometric.getState().shouldRequireAuth());
+  }, [biometricEnabled]);
+
+  useFocusEffect(
+    useCallback(() => {
+      preventCapture('wallet');
+      if (biometricEnabled) {
+        setRequireAuth(useBiometric.getState().shouldRequireAuth());
+      }
+      return () => {
+        allowCapture('wallet');
+      };
+    }, [biometricEnabled]),
+  );
+
+  useEffect(() => {
+    if (biometricEnabled && requireAuth && !authing) {
+      const now = Date.now();
+      if (now - lastAuthAttempt.current < 1500) return;
+      lastAuthAttempt.current = now;
       doAuth();
     }
-  }, [biometricEnabled, biometricLocked]);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    Haptics.medium();
-    await refetch();
-    setRefreshing(false);
-  }, [refetch]);
+  }, [biometricEnabled, requireAuth, authing]);
 
   const doAuth = useCallback(async () => {
     setAuthing(true);
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: 'Unlock Wallet',
-      cancelLabel: 'Cancel',
-      fallbackLabel: 'Use passcode',
-      disableDeviceFallback: false,
-    });
-    if (result.success) {
-      unlock();
-      Haptics.success();
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Unlock Wallet',
+        cancelLabel: 'Cancel',
+        fallbackLabel: 'Use passcode',
+        disableDeviceFallback: false,
+      });
+      if (result.success) {
+        markUnlocked();
+        setRequireAuth(false);
+        Haptics.success();
+      } else {
+        setRequireAuth(true);
+      }
+    } finally {
+      setAuthing(false);
     }
-    setAuthing(false);
-  }, [unlock]);
+  }, [markUnlocked]);
 
-  const transactions = data?.transactions ?? [];
-  const stats = calcStats(transactions);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    Haptics.selection();
+    await Promise.all([refetch(), txQuery.refetch()]);
+    setRefreshing(false);
+    toast.success('Updated!');
+  }, [refetch, txQuery]);
 
-  if (biometricEnabled && biometricLocked) {
+  const onCopyBalance = useCallback(async () => {
+    const bal = data?.balance ?? 0;
+    const ok = await copySensitive(`$${bal.toFixed(2)}`);
+    if (ok) toast.info('Balance copied · clipboard clears in 60s');
+  }, [data?.balance]);
+
+  const stats = useMemo(() => calcStats(data?.transactions ?? []), [data?.transactions]);
+
+  if (biometricEnabled && requireAuth) {
     return (
       <AnimatedScreen direction="fade">
         <View style={styles.container}>
@@ -135,6 +263,7 @@ export default function WalletScreen() {
               <BalanceCard
                 balance={data?.balance ?? 0}
                 onAdd={() => router.push('/wallet/topup')}
+                onCopyBalance={onCopyBalance}
                 style={{ marginTop: spacing.lg }}
               />
             </Animated.View>
@@ -162,41 +291,7 @@ export default function WalletScreen() {
 
             <Animated.Text entering={FadeInDown.duration(420).delay(180)} style={styles.sectionTitle}>Recent activity</Animated.Text>
 
-            {transactions.length === 0 ? (
-              <Animated.View entering={FadeInDown.duration(420).delay(220)} style={styles.emptyState}>
-                <View style={styles.emptyIcon}>
-                  <Ionicons name="wallet-outline" size={28} color={colors.faint} />
-                </View>
-                <Text style={styles.emptyTitle}>No activity yet</Text>
-                <Text style={styles.emptySub}>Your transactions will appear here</Text>
-              </Animated.View>
-            ) : (
-              <Group>
-                {transactions.map((tx, i) => {
-                  const meta = TX_ICONS[tx.type] || { icon: 'ellipse', color: colors.faint, bg: colors.surface2 };
-                  return (
-                    <Animated.View
-                      key={tx._id || i}
-                      entering={FadeInDown.duration(360).delay(Math.min(i, 12) * 50)}
-                      layout={LinearTransition.springify().damping(20).stiffness(220)}
-                    >
-                      <TouchableOpacity style={styles.txRow} activeOpacity={0.6}>
-                        <View style={[styles.txIcon, { backgroundColor: meta.bg }]}>
-                          <Ionicons name={meta.icon} size={18} color={meta.color} />
-                        </View>
-                        <View style={styles.txInfo}>
-                          <Text style={styles.txLabel} numberOfLines={1}>{tx.description}</Text>
-                          <Text style={styles.txDate}>{formatDate(tx.createdAt)}</Text>
-                        </View>
-                        <Text style={[styles.txAmount, { color: tx.amount > 0 ? colors.green : colors.ink }]}>
-                          {tx.amount > 0 ? '+' : ''}${Math.abs(tx.amount).toFixed(2)}
-                        </Text>
-                      </TouchableOpacity>
-                    </Animated.View>
-                  );
-                })}
-              </Group>
-            )}
+            <TransactionList txQuery={txQuery} />
           </>
         )}
       </ScrollView>
@@ -281,12 +376,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
     padding: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.hairline,
+  },
+  txSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginLeft: 68,
   },
   txIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   txInfo: { flex: 1 },
   txLabel: { fontSize: 14.5, fontWeight: '600', color: colors.ink },
   txDate: { fontSize: 12.5, color: colors.faint, marginTop: 2 },
   txAmount: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  footerLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: spacing.lg,
+  },
+  footerLoaderText: {
+    fontSize: 13,
+    color: colors.muted,
+    fontWeight: '500',
+  },
+  endOfList: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: spacing.lg,
+  },
+  endOfListText: {
+    fontSize: 13,
+    color: colors.faint,
+    fontWeight: '500',
+  },
 });

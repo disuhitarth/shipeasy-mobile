@@ -10,9 +10,13 @@ import { Cell, Group } from '@/components/ui/Cell';
 import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { PressableScale } from '@/components/PressableScale';
-import { colors, spacing, borderRadius } from '@/lib/theme';
-import { useState, useCallback } from 'react';
+import { colors, spacing, borderRadius, shadows } from '@/lib/theme';
+import { useState, useCallback, useEffect } from 'react';
+import { track } from '@/lib/analytics';
+import { formatTimeAgo } from '@/lib/timeAgo';
+import { toast } from '@/lib/toast';
 import * as Haptics from '@/lib/haptics';
+import Constants from 'expo-constants';
 
 const PROFILE_PRIMARY: Array<{
   label: string;
@@ -37,6 +41,7 @@ export default function ProfileScreen() {
   const { isAuthenticated, user, logout } = useAuth();
   const biometricEnabled = useBiometric((s) => s.enabled);
   const setBiometric = useBiometric((s) => s.setEnabled);
+  const lockNow = useBiometric((s) => s.lockNow);
   const [toggling, setToggling] = useState(false);
 
   const initials = user?.name
@@ -61,11 +66,13 @@ export default function ProfileScreen() {
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       if (!hasHardware) {
         Alert.alert('Not available', 'Biometric authentication is not available on this device');
+        void track('biometric_auth_failed', { reason: 'no_hardware' });
         return;
       }
       const enrolled = await LocalAuthentication.isEnrolledAsync();
       if (!enrolled) {
         Alert.alert('Not set up', 'No biometrics enrolled. Set up Face ID / fingerprint in system settings.');
+        void track('biometric_auth_failed', { reason: 'not_enrolled' });
         return;
       }
       const result = await LocalAuthentication.authenticateAsync({
@@ -76,6 +83,9 @@ export default function ProfileScreen() {
       if (result.success) {
         await setBiometric(true);
         Haptics.success();
+        void track('biometric_auth_success', { source: 'profile_toggle' });
+      } else {
+        void track('biometric_auth_failed', { reason: 'cancelled_or_failed' });
       }
     } finally {
       setToggling(false);
@@ -115,11 +125,24 @@ export default function ProfileScreen() {
               </PressableScale>
             </View>
           </Animated.View>
-          <Animated.Text entering={FadeInDown.duration(420).delay(140)} style={styles.version}>ShipEasy Canada · v1.0.0</Animated.Text>
+          <Animated.Text entering={FadeInDown.duration(420).delay(140)} style={styles.version}>
+            ShipEasy Canada · v{(Constants.expoConfig as any)?.version ?? '1.0.0'}
+          </Animated.Text>
         </ScrollView>
       </AnimatedScreen>
     );
   }
+
+  const appVersion = (Constants.expoConfig as any)?.version ?? '1.0.0';
+  const buildNumber =
+    (Constants.expoConfig as any)?.ios?.buildNumber ??
+    (Constants.expoConfig as any)?.android?.versionCode ??
+    '1';
+  const [, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <AnimatedScreen direction="fade-up">
@@ -138,6 +161,22 @@ export default function ProfileScreen() {
             <Text style={styles.profileMeta}>
               {user?.email} · Member since {memberSince}
             </Text>
+          </View>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.duration(420).delay(80)} style={styles.carrierCard}>
+          <View style={styles.carrierIcon}>
+            <Ionicons name="car-sport" size={20} color={colors.green} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={styles.carrierHeader}>
+              <Text style={styles.carrierTitle}>Stallion Express</Text>
+              <View style={styles.carrierBadge}>
+                <Ionicons name="checkmark-circle" size={12} color={colors.green} />
+                <Text style={styles.carrierBadgeText}>Connected</Text>
+              </View>
+            </View>
+            <Text style={styles.carrierSub}>Last sync · {formatTimeAgo(Date.now() - 2 * 60_000)}</Text>
           </View>
         </Animated.View>
 
@@ -196,13 +235,39 @@ export default function ProfileScreen() {
         </StaggeredItem>
 
         <StaggeredItem index={PROFILE_PRIMARY.length + 2} delayStep={40}>
+          <PressableScale
+            style={styles.lockBtn}
+            onPress={() => {
+              if (!biometricEnabled) {
+                Alert.alert(
+                  'No lock enabled',
+                  'Enable a biometric or PIN lock in Security to use this.',
+                  [{ text: 'OK' }],
+                );
+                return;
+              }
+              lockNow();
+              Haptics.success();
+              toast.success('App locked');
+              router.replace('/(tabs)/wallet');
+            }}
+            haptic="warning"
+          >
+            <Ionicons name="lock-closed-outline" size={16} color={colors.accent} />
+            <Text style={styles.lockText}>Lock app</Text>
+          </PressableScale>
+        </StaggeredItem>
+
+        <StaggeredItem index={PROFILE_PRIMARY.length + 3} delayStep={40}>
           <PressableScale style={styles.logoutBtn} onPress={logout} haptic="warning">
             <Ionicons name="log-out-outline" size={16} color={colors.red} />
             <Text style={styles.logoutText}>Log out</Text>
           </PressableScale>
         </StaggeredItem>
 
-        <Animated.Text entering={FadeInDown.duration(360).delay(220)} style={styles.version}>ShipEasy Canada · v1.0.0</Animated.Text>
+        <Animated.Text entering={FadeInDown.duration(360).delay(220)} style={styles.version}>
+          ShipEasy Canada · v{appVersion} ({buildNumber})
+        </Animated.Text>
       </ScrollView>
     </AnimatedScreen>
   );
@@ -233,6 +298,35 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 19, fontWeight: '700', letterSpacing: -0.4, color: colors.ink },
   profileMeta: { fontSize: 13.5, color: colors.faint, marginTop: 2 },
   group: { marginTop: spacing.lg },
+  carrierCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    ...shadows.sm,
+  },
+  carrierIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.greenSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carrierHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  carrierTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
+  carrierBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.greenSoft,
+  },
+  carrierBadgeText: { fontSize: 10.5, fontWeight: '700', color: colors.green, letterSpacing: 0.3 },
+  carrierSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   bioRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -262,6 +356,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   logoutText: { color: colors.red, fontSize: 15, fontWeight: '600' },
+  lockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 50,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.sm,
+    marginTop: spacing.lg,
+  },
+  lockText: { color: colors.accent, fontSize: 15, fontWeight: '600' },
   version: { textAlign: 'center', fontSize: 12, color: colors.faint, marginTop: 18 },
   guestCard: {
     alignItems: 'center',

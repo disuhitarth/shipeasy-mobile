@@ -7,10 +7,12 @@ import { useWallet } from '@/store/wallet';
 import { useWalletData, useShipments } from '@/lib/queries';
 import { BalanceCard } from '@/components/ui/BalanceCard';
 import { colors, borderRadius, spacing } from '@/lib/theme';
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { PressableCard, PressableScale } from '@/components/PressableScale';
+import { toast } from '@/lib/toast';
+import { track } from '@/lib/analytics';
 import * as Haptics from '@/lib/haptics';
 
 function getInitials(name: string) {
@@ -46,11 +48,23 @@ export default function HomeScreen() {
     if (walletData?.balance != null) setBalance(walletData.balance);
   }, [walletData?.balance]);
 
+  const lowBalanceNotifiedRef = useRef<boolean>(false);
+  useEffect(() => {
+    const balance = walletData?.balance ?? 0;
+    if (balance < 10 && balance >= 0 && !lowBalanceNotifiedRef.current) {
+      lowBalanceNotifiedRef.current = true;
+      void track('wallet_low_balance', { balance, threshold: 10 });
+    } else if (balance >= 10) {
+      lowBalanceNotifiedRef.current = false;
+    }
+  }, [walletData?.balance]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    Haptics.medium();
+    Haptics.selection();
     await refetch();
     setRefreshing(false);
+    toast.success('Updated!');
   }, [refetch]);
 
   const userName = user?.name ?? 'Guest';

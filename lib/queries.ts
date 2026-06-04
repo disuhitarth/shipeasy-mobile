@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import api from './api';
 import type { Shipment, Transaction, Address, SKU, ShippingRate, Pagination } from '@/types';
 
@@ -14,6 +14,32 @@ export function useShipments(page = 1, status?: string) {
         `/shipments?${params}`,
       );
       return res.data;
+    },
+  });
+}
+
+export const SHIPMENTS_PAGE_SIZE = 20;
+
+export function useInfiniteShipments(filter?: { status?: string; sort?: string; search?: string }) {
+  return useInfiniteQuery({
+    queryKey: ['shipments', 'infinite', filter],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({
+        page: String(pageParam),
+        limit: String(SHIPMENTS_PAGE_SIZE),
+      });
+      if (filter?.status) params.set('status', filter.status);
+      if (filter?.sort) params.set('sort', filter.sort);
+      if (filter?.search) params.set('search', filter.search);
+      const res = await api.get<{ shipments: Shipment[]; pagination: Pagination }>(
+        `/shipments?${params}`,
+      );
+      return res.data;
+    },
+    getNextPageParam: (lastPage) => {
+      const { page, totalPages } = lastPage.pagination;
+      return page < totalPages ? page + 1 : undefined;
     },
   });
 }
@@ -80,6 +106,31 @@ export function useWalletData() {
         transactions: Transaction[];
       }>('/wallet');
       return res.data;
+    },
+  });
+}
+
+export const WALLET_TX_PAGE_SIZE = 20;
+
+export type InfiniteWalletTxResult = ReturnType<typeof useInfiniteWalletTransactions>;
+
+export function useInfiniteWalletTransactions() {
+  return useInfiniteQuery({
+    queryKey: ['wallet', 'transactions', 'infinite'],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams({
+        page: String(pageParam),
+        limit: String(WALLET_TX_PAGE_SIZE),
+      });
+      const res = await api.get<{ transactions: Transaction[]; pagination: Pagination }>(
+        `/wallet/transactions?${params}`,
+      );
+      return res.data;
+    },
+    getNextPageParam: (lastPage) => {
+      const { page, totalPages } = lastPage.pagination;
+      return page < totalPages ? page + 1 : undefined;
     },
   });
 }

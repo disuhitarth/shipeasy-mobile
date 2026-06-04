@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSettings } from '@/store/settings';
 import { colors, borderRadius, spacing } from '@/lib/theme';
 import { toast } from '@/lib/toast';
+import { track, page } from '@/lib/analytics';
 
 interface Slide {
   icon: keyof typeof Ionicons.glyphMap;
@@ -46,11 +47,17 @@ export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const fade = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
+  const appVersion = (Constants.expoConfig?.version as string) || '1.0.0';
+  const buildNumber =
+    (Constants.expoConfig as any)?.ios?.buildNumber ??
+    (Constants.expoConfig as any)?.android?.versionCode ??
+    '1';
 
   const slide = SLIDES[index];
   const isLast = index === SLIDES.length - 1;
 
   useEffect(() => {
+    void page('onboarding', { slide: index, total: SLIDES.length });
     fade.setValue(0);
     translateX.setValue(index === 0 ? 20 : -20);
     Animated.parallel([
@@ -61,8 +68,9 @@ export default function OnboardingScreen() {
 
   const finish = async () => {
     await setOnboarded(true);
-    const version = (Constants.expoConfig?.version as string) || '1.0.0';
+    const version = appVersion;
     await setLastSeenVersion(version);
+    void track('app_open', { source: 'onboarding_finished', version });
     router.replace('/(tabs)');
   };
 
@@ -148,7 +156,7 @@ export default function OnboardingScreen() {
             color={colors.white}
           />
         </TouchableOpacity>
-        <Text style={styles.version}>v{(Constants.expoConfig?.version as string) || '1.0.0'}</Text>
+        <Text style={styles.version}>v{appVersion} · build {String(buildNumber)}</Text>
       </View>
     </View>
   );

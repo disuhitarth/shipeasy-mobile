@@ -1,5 +1,5 @@
 import { View, Text, TextInput, StyleSheet, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { TextInput as RNTextInput } from 'react-native';
@@ -15,6 +15,7 @@ import { toast } from '@/lib/toast';
 import { FormField } from '@/components/ui/FormField';
 import { PressableScale } from '@/components/PressableScale';
 import * as Haptics from '@/lib/haptics';
+import { preventCapture, allowCapture } from '@/lib/screenCapture';
 
 const PACKAGE_TYPES = [
   { id: 'envelope', label: 'Envelope', icon: 'document-text' as const },
@@ -87,6 +88,15 @@ export default function ShipNowScreen() {
   const update = useCallback((p: Partial<FormShape>) => {
     setForm((f) => ({ ...f, ...p }));
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      preventCapture('ship-now');
+      return () => {
+        allowCapture('ship-now');
+      };
+    }, []),
+  );
 
   useEffect(() => {
     const w = parseFloat(form.weight);

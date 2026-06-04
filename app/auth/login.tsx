@@ -1,8 +1,8 @@
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import type { TextInput } from 'react-native';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInUp, FadeInDown } from 'react-native-reanimated';
 import { useAuth } from '@/store/auth';
@@ -12,6 +12,21 @@ import { FormField } from '@/components/ui/FormField';
 import { PressableScale } from '@/components/PressableScale';
 import { colors, spacing, borderRadius } from '@/lib/theme';
 import * as Haptics from '@/lib/haptics';
+import {
+  isLoginLocked,
+  getLoginLockout,
+  recordFailedLogin,
+  recordSuccessfulLogin,
+  getRemainingAttempts,
+  LOGIN_LOCKOUT_MS,
+  LOGIN_MAX_ATTEMPTS,
+} from '@/lib/loginRateLimit';
+import { checkAndRecordLogin, describeLocation } from '@/lib/analytics';
+
+function formatSeconds(ms: number): string {
+  const s = Math.max(1, Math.ceil(ms / 1000));
+  return `${s}s`;
+}
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -19,11 +34,49 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [tick, setTick] = useState(0);
+  const [remainingAttempts, setRemainingAttempts] = useState<number>(LOGIN_MAX_ATTEMPTS);
+  const [suspiciousNote, setSuspiciousNote] = useState<string | null>(null);
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const login = useAuth((s) => s.login);
   const enableGuest = useAuth((s) => s.enableGuest);
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ reason?: string }>();
+
+  useEffect(() => {
+    (async () => {
+      const { lockedUntil: lu } = await getLoginLockout();
+      setLockedUntil(lu);
+      const rem = await getRemainingAttempts();
+      setRemainingAttempts(rem);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (params.reason === 'timeout') {
+      toast.info('Signed out due to inactivity');
+    }
+  }, [params.reason]);
+
+  useEffect(() => {
+    if (lockedUntil == null) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  useEffect(() => {
+    if (lockedUntil == null) return;
+    if (Date.now() >= lockedUntil) {
+      setLockedUntil(null);
+      setRemainingAttempts(LOGIN_MAX_ATTEMPTS);
+      getLoginLockout().then(() => {});
+    }
+  }, [tick, lockedUntil]);
+
+  const lockRemainingMs = lockedUntil ? Math.max(0, lockedUntil - Date.now()) : 0;
+  const isLocked = lockRemainingMs > 0;
 
   const validate = (): ValidationResult => {
     const r = validateForm({ email, password }, {
@@ -35,6 +88,10 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
+    if (isLocked) {
+      toast.error(`Too many attempts, try again in ${formatSeconds(lockRemainingMs)}`);
+      return;
+    }
     setTouched({ email: true, password: true });
     const r = validate();
     if (!r.isValid) {
@@ -46,11 +103,30 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
+      const suspicious = await checkAndRecordLogin().catch(() => null);
       await login(email.trim(), password);
+      await recordSuccessfulLogin();
+      if (suspicious?.suspicious) {
+        setSuspiciousNote(`New sign-in from ${describeLocation(suspicious.current)}. ${suspicious.reasons.join('; ')}`);
+      }
+      Haptics.success();
       toast.success('Welcome back');
       router.back();
     } catch (e: any) {
-      toast.error(e?.message || 'Could not sign in');
+      const result = await recordFailedLogin();
+      setRemainingAttempts(LOGIN_MAX_ATTEMPTS - result.attempts);
+      if (result.lockedUntil) {
+        setLockedUntil(result.lockedUntil);
+        Haptics.error();
+        toast.error(`Too many attempts, try again in ${formatSeconds(LOGIN_LOCKOUT_MS)}`);
+      } else if (result.attempts > 0) {
+        toast.error(
+          (e?.message || 'Could not sign in') +
+            ` · ${LOGIN_MAX_ATTEMPTS - result.attempts} attempt${LOGIN_MAX_ATTEMPTS - result.attempts === 1 ? '' : 's'} left`,
+        );
+      } else {
+        toast.error(e?.message || 'Could not sign in');
+      }
     } finally {
       setLoading(false);
     }
@@ -84,6 +160,25 @@ export default function LoginScreen() {
           Sign in to your ShipEasy account
         </Animated.Text>
 
+        {suspiciousNote && (
+          <Animated.View entering={FadeInUp.duration(360)} style={styles.suspiciousBanner}>
+            <Ionicons name="shield-checkmark-outline" size={18} color={colors.amber} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.suspiciousTitle}>Was this you?</Text>
+              <Text style={styles.suspiciousText}>{suspiciousNote}</Text>
+            </View>
+          </Animated.View>
+        )}
+
+        {isLocked && (
+          <Animated.View entering={FadeInUp.duration(360)} style={styles.lockBanner}>
+            <Ionicons name="lock-closed" size={18} color={colors.red} />
+            <Text style={styles.lockText}>
+              Too many attempts, try again in {formatSeconds(lockRemainingMs)}
+            </Text>
+          </Animated.View>
+        )}
+
         <Animated.View entering={FadeInUp.duration(360).delay(220)} style={styles.form}>
           <FormField
             ref={emailRef}
@@ -102,6 +197,7 @@ export default function LoginScreen() {
             returnKeyType="next"
             onSubmitEditing={() => passwordRef.current?.focus()}
             leftIcon="mail-outline"
+            editable={!isLocked && !loading}
           />
           <FormField
             ref={passwordRef}
@@ -119,24 +215,33 @@ export default function LoginScreen() {
             returnKeyType="go"
             onSubmitEditing={handleLogin}
             leftIcon="lock-closed-outline"
+            editable={!isLocked && !loading}
           />
         </Animated.View>
 
+        {!isLocked && remainingAttempts < LOGIN_MAX_ATTEMPTS && (
+          <Text style={styles.attemptsNote}>
+            {remainingAttempts} attempt{remainingAttempts === 1 ? '' : 's'} remaining
+          </Text>
+        )}
+
         <Animated.View entering={FadeInUp.duration(360).delay(320)}>
           <PressableScale
-            style={[styles.submitBtn, loading && styles.submitBtnDisabled]}
-            onPress={() => { Haptics.success(); handleLogin(); }}
-            disabled={loading}
+            style={[styles.submitBtn, (loading || isLocked) && styles.submitBtnDisabled]}
+            onPress={() => { Haptics.selection(); handleLogin(); }}
+            disabled={loading || isLocked}
             haptic="success"
           >
-            <Text style={styles.submitText}>
-              {loading ? 'Signing in…' : 'Sign In'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <Text style={styles.submitText}>{isLocked ? `Locked (${formatSeconds(lockRemainingMs)})` : 'Sign In'}</Text>
+            )}
           </PressableScale>
         </Animated.View>
 
         <Animated.View entering={FadeInUp.duration(360).delay(400)}>
-          <PressableScale style={styles.guestBtn} onPress={() => { enableGuest(); router.back(); }} haptic="light">
+          <PressableScale style={styles.guestBtn} onPress={() => { enableGuest(); router.back(); }} haptic="light" disabled={loading}>
             <Text style={styles.guestText}>Continue as guest</Text>
           </PressableScale>
         </Animated.View>
@@ -175,4 +280,32 @@ const styles = StyleSheet.create({
   guestText: { color: colors.muted, fontSize: 15, fontWeight: '600' },
   switchText: { textAlign: 'center', color: colors.muted, fontSize: 14, marginTop: spacing['2xl'] },
   switchLink: { color: colors.accent, fontWeight: '600' },
+  lockBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.redSoft,
+    padding: spacing.md,
+    borderRadius: borderRadius.sm,
+    marginTop: spacing.lg,
+  },
+  lockText: { color: colors.red, fontSize: 14, fontWeight: '600', flex: 1 },
+  attemptsNote: {
+    textAlign: 'right',
+    color: colors.amber,
+    fontSize: 12.5,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  suspiciousBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: colors.amberSoft,
+    padding: spacing.md,
+    borderRadius: borderRadius.sm,
+    marginTop: spacing.lg,
+  },
+  suspiciousTitle: { fontSize: 13.5, fontWeight: '700', color: colors.amber },
+  suspiciousText: { fontSize: 12.5, color: colors.amber, marginTop: 2, lineHeight: 17 },
 });

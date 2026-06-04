@@ -10,7 +10,7 @@ import { Group } from '@/components/ui/Cell';
 import { colors, spacing, borderRadius, shadows, typography } from '@/lib/theme';
 
 interface ToggleRow {
-  key: 'push' | 'labelUpdates' | 'walletAlerts' | 'marketing';
+  key: 'push' | 'labelUpdates' | 'walletAlerts' | 'marketing' | 'autoRefreshTracking';
   icon: keyof typeof Ionicons.glyphMap;
   iconColor: string;
   iconBg: string;
@@ -53,6 +53,14 @@ const ROWS: ToggleRow[] = [
     title: 'Marketing & offers',
     description: 'Promotions, rate changes, new features',
   },
+  {
+    key: 'autoRefreshTracking',
+    icon: 'pulse-outline',
+    iconColor: colors.green,
+    iconBg: colors.greenSoft,
+    title: 'Auto-refresh tracking',
+    description: 'Poll carrier every 30s on the detail screen',
+  },
 ];
 
 export default function NotificationsScreen() {
@@ -75,6 +83,13 @@ export default function NotificationsScreen() {
   const handleToggle = useCallback(
     async (row: ToggleRow) => {
       const next = !prefs[row.key];
+      if (row.key === 'autoRefreshTracking') {
+        await setPref(row.key, next);
+        light();
+        if (next) toast.success('Auto-refresh tracking enabled');
+        else toast.info('Auto-refresh disabled — manual only');
+        return;
+      }
       if (next && row.requiresPermission) {
         const current = await permissionStatus();
         if (current !== 'granted') {
@@ -109,11 +124,11 @@ export default function NotificationsScreen() {
     });
   }
 
-  const allOn = prefs.push && prefs.labelUpdates && prefs.walletAlerts && prefs.marketing;
+  const pushOn = prefs.push && prefs.labelUpdates && prefs.walletAlerts && prefs.marketing;
   const allOff = !prefs.push && !prefs.labelUpdates && !prefs.walletAlerts && !prefs.marketing;
 
   const toggleAll = async () => {
-    const next = !allOn;
+    const next = !pushOn;
     await Promise.all([
       setPref('push', next),
       setPref('labelUpdates', next),
@@ -150,17 +165,17 @@ export default function NotificationsScreen() {
 
         <View style={styles.quickRow}>
           <TouchableOpacity
-            style={[styles.quickBtn, allOn && styles.quickBtnOn]}
+            style={[styles.quickBtn, pushOn && styles.quickBtnOn]}
             onPress={toggleAll}
             activeOpacity={0.7}
           >
             <Ionicons
-              name={allOn ? 'notifications-off-outline' : 'notifications-outline'}
+              name={pushOn ? 'notifications-off-outline' : 'notifications-outline'}
               size={18}
-              color={allOn ? '#fff' : colors.ink}
+              color={pushOn ? '#fff' : colors.ink}
             />
-            <Text style={[styles.quickText, allOn && styles.quickTextOn]}>
-              {allOn ? 'Mute everything' : allOff ? 'Enable all' : 'Enable all'}
+            <Text style={[styles.quickText, pushOn && styles.quickTextOn]}>
+              {pushOn ? 'Mute everything' : allOff ? 'Enable all' : 'Enable all'}
             </Text>
           </TouchableOpacity>
         </View>

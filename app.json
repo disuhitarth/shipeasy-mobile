@@ -2,7 +2,7 @@
   "expo": {
     "name": "ShipEasy Canada",
     "slug": "shipeasy-mobile",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -15,6 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.shipeasy.mobile",
+      "buildNumber": "2",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Unlock your wallet with Face ID",
         "NSLocationWhenInUseUsageDescription": "Used to autofill shipping addresses",
@@ -24,6 +25,7 @@
     },
     "android": {
       "package": "com.shipeasy.mobile",
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#635BFF"

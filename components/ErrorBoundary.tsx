@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius, shadows, typography } from '@/lib/theme';
+import { reportError } from '@/lib/errorReporting';
 
 interface Props {
   children: React.ReactNode;
@@ -26,6 +27,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
     if (__DEV__) {
       console.error('[ErrorBoundary]', error, info.componentStack);
     }
+    void reportError(error, {
+      action: 'ErrorBoundary',
+      extra: { componentStack: info.componentStack },
+    });
   }
 
   reset = () => {

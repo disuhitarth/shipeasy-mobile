@@ -1,24 +1,43 @@
-import { View, Text, StyleSheet, ScrollView, Alert, Animated, ActivityIndicator } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { View, Text, StyleSheet, ScrollView, Alert, Animated, ActivityIndicator, Linking, Platform, TouchableOpacity } from 'react-native';
+import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { useState, useRef, useEffect } from 'react';
+import * as Notifications from 'expo-notifications';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AnimatedRN, { FadeInDown, LinearTransition } from 'react-native-reanimated';
-import { useShipment, useTracking, useVoidShipment } from '@/lib/queries';
+import { useShipment, useVoidShipment } from '@/lib/queries';
 import api from '@/lib/api';
 import { bytesToBase64 } from '@/lib/base64';
 import { Badge } from '@/components/ui/Badge';
-import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { PressableCard, PressableScale } from '@/components/PressableScale';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { colors, spacing, borderRadius, shadows } from '@/lib/theme';
-import type { TrackingEvent } from '@/types';
+import { useTrackingPolling } from '@/lib/useTrackingPolling';
+import { track } from '@/lib/analytics';
+import { formatTimeAgo } from '@/lib/timeAgo';
 import * as Haptics from '@/lib/haptics';
+import type { TrackingEvent } from '@/types';
+import { preventCapture, allowCapture } from '@/lib/screenCapture';
+import { copySensitive } from '@/lib/clipboard';
+import { toast } from '@/lib/toast';
 
 const CAN_VOID = ['label-created', 'pending'];
+const SUPPORT_EMAIL = 'support@shipeasycanada.com';
+const TRACK_BASE_URL = 'https://shipeasyplus.netlify.app/track';
+
+const STATUS_NOTIFICATION_TITLES: Record<string, string> = {
+  'picked-up': 'Package picked up',
+  'in-transit': 'In transit',
+  'out-for-delivery': 'Out for delivery',
+  'delivered': 'Delivered!',
+  'failed': 'Delivery failed',
+  'voided': 'Label voided',
+};
 
 function PulseTag() {
   const opacity = useRef(new Animated.Value(1));
@@ -42,12 +61,73 @@ function PulseTag() {
 export default function ShipmentDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: shipment, isLoading, isError, refetch } = useShipment(id);
-  const { data: tracking, isLoading: trackLoading } = useTracking(id);
+  const {
+    events,
+    connectionStatus,
+    lastFetchedAt,
+    isFetching,
+    refetch: refetchTracking,
+  } = useTrackingPolling({ shipCode: id, intervalMs: 30_000 });
   const voidShipment = useVoidShipment();
   const [sharing, setSharing] = useState(false);
+  const [, setNow] = useState<number>(Date.now());
   const insets = useSafeAreaInsets();
+  const lastStatusRef = useRef<string | null>(null);
+  const notifiedSetRef = useRef<Set<string>>(new Set());
 
-  const events: TrackingEvent[] = tracking?.events ?? tracking ?? [];
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const next = shipment?.status;
+    if (!next) return;
+    const prev = lastStatusRef.current;
+    if (prev && prev !== next) {
+      const key = `${next}:${shipment?.shipCode ?? ''}`;
+      if (!notifiedSetRef.current.has(key) && STATUS_NOTIFICATION_TITLES[next]) {
+        notifiedSetRef.current.add(key);
+        try {
+          if (Platform.OS !== 'web') {
+            void Notifications.scheduleNotificationAsync({
+              content: {
+                title: STATUS_NOTIFICATION_TITLES[next],
+                body: `Shipment ${shipment?.shipCode ?? ''} is now ${next.replace(/-/g, ' ')}.`,
+                data: { type: 'shipment', shipCode: shipment?.shipCode, status: next },
+                sound: 'default',
+              },
+              trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1 },
+            });
+            void track('notification_received', { source: 'tracking_poll', status: next });
+          }
+        } catch {}
+      }
+    }
+    lastStatusRef.current = next;
+  }, [shipment?.status, shipment?.shipCode]);
+
+  useEffect(() => {
+    void track('screen_view', { screen: 'shipment_detail', shipCode: id });
+  }, [id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      preventCapture('shipment-detail');
+      return () => {
+        allowCapture('shipment-detail');
+      };
+    }, []),
+  );
+
+  const copyTrackingNumber = useCallback(async () => {
+    const code = shipment?.trackingCode || shipment?.shipCode || id;
+    if (!code) return;
+    Haptics.light();
+    const ok = await copySensitive(String(code));
+    if (ok) toast.info('Tracking number copied · clipboard clears in 60s');
+  }, [shipment?.trackingCode, shipment?.shipCode, id]);
+
   const isDelivered = shipment?.status === 'delivered';
   const isInTransit = !isDelivered && !['voided', 'failed', 'pending'].includes(shipment?.status || '');
 
@@ -84,6 +164,7 @@ export default function ShipmentDetailScreen() {
           onPress: async () => {
             try {
               await voidShipment.mutateAsync(id);
+              void track('shipment_voided', { shipCode: id });
               Haptics.success();
               Alert.alert('Voided', 'Label has been voided and refunded.');
               router.back();
@@ -93,6 +174,64 @@ export default function ShipmentDetailScreen() {
       ],
     );
   };
+
+  const buildTrackingUrl = useCallback(() => {
+    const code = shipment?.shipCode ?? id;
+    return `${TRACK_BASE_URL}/${code}`;
+  }, [shipment?.shipCode, id]);
+
+  const shareTracking = useCallback(async () => {
+    Haptics.light();
+    const url = buildTrackingUrl();
+    const message = `Track my ShipEasy package: ${url}`;
+    try {
+      if (Platform.OS !== 'web' && (await Sharing.isAvailableAsync())) {
+        await Sharing.shareAsync(url, { dialogTitle: 'Share tracking link' }).catch(async () => {
+          await Linking.openURL(`mailto:?subject=${encodeURIComponent('Track my package')}&body=${encodeURIComponent(message)}`);
+        });
+      } else {
+        await Linking.openURL(`mailto:?subject=${encodeURIComponent('Track my package')}&body=${encodeURIComponent(message)}`);
+      }
+      void track('notification_tapped', { source: 'share_tracking' });
+    } catch (err) {
+      Alert.alert('Could not share', 'Please try again');
+    }
+  }, [buildTrackingUrl]);
+
+  const reportIssue = useCallback(async () => {
+    Haptics.light();
+    const code = shipment?.shipCode ?? id;
+    const recipient = shipment?.recipientName ?? 'Recipient';
+    const subject = encodeURIComponent(`ShipEasy issue — ${code}`);
+    const body = encodeURIComponent(
+      [
+        'Hi ShipEasy Support,',
+        '',
+        `I need help with shipment: ${code}`,
+        `Recipient: ${recipient}`,
+        '',
+        'Issue description:',
+        '',
+        '---',
+        'Additional details:',
+        `Status: ${shipment?.status ?? 'unknown'}`,
+        `Last tracking update: ${lastFetchedAt ? new Date(lastFetchedAt).toISOString() : 'never'}`,
+        '---',
+      ].join('\n'),
+    );
+    const mailto = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+    try {
+      const supported = await Linking.canOpenURL(mailto);
+      if (supported) {
+        await Linking.openURL(mailto);
+      } else {
+        Alert.alert('Email us', SUPPORT_EMAIL);
+      }
+      void track('error', { source: 'report_issue', shipCode: code });
+    } catch {
+      Alert.alert('Email us', SUPPORT_EMAIL);
+    }
+  }, [shipment?.shipCode, shipment?.recipientName, shipment?.status, id, lastFetchedAt]);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '';
@@ -108,6 +247,9 @@ export default function ShipmentDetailScreen() {
     return '2\u20135 business days';
   };
 
+  const trackingTimestampLabel =
+    lastFetchedAt ? `Updated ${formatTimeAgo(lastFetchedAt)}` : 'Waiting for first update';
+
   return (
     <AnimatedScreen direction="fade-up">
       <View style={styles.container}>
@@ -115,8 +257,17 @@ export default function ShipmentDetailScreen() {
           <PressableScale style={styles.backBtn} onPress={() => router.back()} haptic="light">
             <Ionicons name="chevron-back" size={20} color={colors.ink} />
           </PressableScale>
-          <Text style={styles.headerTitle}>Shipment</Text>
-          <View style={{ width: 40 }} />
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>Shipment</Text>
+            <LiveIndicator status={connectionStatus} lastFetchedAt={lastFetchedAt} compact />
+          </View>
+          <PressableScale style={styles.refreshBtn} onPress={() => { Haptics.light(); refetch(); void refetchTracking(); }} haptic="light">
+            {isFetching ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Ionicons name="refresh" size={18} color={colors.ink} />
+            )}
+          </PressableScale>
         </AnimatedRN.View>
 
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInner} showsVerticalScrollIndicator={false}>
@@ -171,10 +322,15 @@ export default function ShipmentDetailScreen() {
                     </View>
 
                     {shipment.trackingCode && (
-                      <View style={styles.trackRow}>
+                      <TouchableOpacity
+                        style={styles.trackRow}
+                        onPress={copyTrackingNumber}
+                        activeOpacity={0.6}
+                      >
                         <Ionicons name="barcode-outline" size={14} color={colors.faint} />
                         <Text style={styles.trackValue}>{shipment.trackingCode}</Text>
-                      </View>
+                        <Ionicons name="copy-outline" size={13} color={colors.faint} />
+                      </TouchableOpacity>
                     )}
                   </View>
                 </StaggeredItem>
@@ -183,10 +339,11 @@ export default function ShipmentDetailScreen() {
               <AnimatedRN.View entering={FadeInDown.duration(420).delay(80)}>
                 <View style={styles.etaBanner}>
                   <Ionicons name="calendar-outline" size={18} color={colors.accent} />
-                  <View>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.etaTitle}>Estimated delivery</Text>
                     <Text style={styles.etaSub}>{formatEstDelivery()}</Text>
                   </View>
+                  <LiveIndicator status={connectionStatus} lastFetchedAt={lastFetchedAt} compact />
                 </View>
               </AnimatedRN.View>
 
@@ -247,14 +404,18 @@ export default function ShipmentDetailScreen() {
               {events.length > 0 && (
                 <AnimatedRN.View entering={FadeInDown.duration(420).delay(160)}>
                   <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Tracking</Text>
+                    <View style={styles.cardHeader}>
+                      <Text style={styles.cardTitle}>Tracking</Text>
+                      <LiveIndicator status={connectionStatus} lastFetchedAt={lastFetchedAt} compact />
+                    </View>
+                    <Text style={styles.trackingSub}>{trackingTimestampLabel}</Text>
                     <View style={styles.timeline}>
                       {events.map((ev, i) => {
                         const isLatest = i === 0;
                         const isLast = i === events.length - 1;
                         return (
                           <AnimatedRN.View
-                            key={i}
+                            key={`${ev.date}-${i}`}
                             entering={FadeInDown.duration(360).delay(Math.min(i, 8) * 60)}
                             layout={LinearTransition.springify().damping(20).stiffness(220)}
                             style={styles.tlRow}
@@ -287,6 +448,29 @@ export default function ShipmentDetailScreen() {
               )}
 
               <AnimatedRN.View entering={FadeInDown.duration(420).delay(200)}>
+                <View style={styles.actionRow}>
+                  <PressableCard style={styles.actionCard} onPress={shareTracking} haptic="light">
+                    <View style={[styles.actionIcon, { backgroundColor: colors.accentSoft }]}>
+                      <Ionicons name="share-outline" size={20} color={colors.accent} />
+                    </View>
+                    <View style={styles.actionInfo}>
+                      <Text style={styles.actionTitle}>Share tracking</Text>
+                      <Text style={styles.actionSub}>Send link to recipient</Text>
+                    </View>
+                  </PressableCard>
+                  <PressableCard style={styles.actionCard} onPress={reportIssue} haptic="light">
+                    <View style={[styles.actionIcon, { backgroundColor: colors.amberSoft }]}>
+                      <Ionicons name="flag-outline" size={20} color={colors.amber} />
+                    </View>
+                    <View style={styles.actionInfo}>
+                      <Text style={styles.actionTitle}>Report issue</Text>
+                      <Text style={styles.actionSub}>Email our support team</Text>
+                    </View>
+                  </PressableCard>
+                </View>
+              </AnimatedRN.View>
+
+              <AnimatedRN.View entering={FadeInDown.duration(420).delay(220)}>
                 <PressableCard style={styles.labelRow} onPress={openLabel} disabled={sharing} haptic="light">
                   <View style={styles.labelIcon}>
                     <Ionicons name="document-text" size={22} color={colors.accent} />
@@ -346,6 +530,12 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     ...shadows.md,
   },
+  refreshBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+    ...shadows.md,
+  },
+  headerCenter: { alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: colors.ink },
   scroll: { flex: 1 },
   scrollInner: { padding: spacing.xl, gap: spacing.md },
@@ -407,9 +597,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface, borderRadius: borderRadius.md,
     padding: spacing.lg, ...shadows.md,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.lg,
+  },
   cardTitle: {
     fontSize: 18, fontWeight: '700', letterSpacing: -0.3,
-    marginBottom: spacing.lg, color: colors.ink,
+    color: colors.ink,
+  },
+  trackingSub: {
+    fontSize: 12,
+    color: colors.faint,
+    marginTop: -8,
+    marginBottom: spacing.lg,
   },
   detailRow: {
     flexDirection: 'row', justifyContent: 'space-between',
@@ -443,6 +645,28 @@ const styles = StyleSheet.create({
     paddingVertical: 2, paddingHorizontal: 8, borderRadius: 6,
     overflow: 'hidden', alignSelf: 'flex-start',
   },
+
+  actionRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  actionCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+    ...shadows.md,
+  },
+  actionIcon: {
+    width: 38, height: 38, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  actionInfo: { flex: 1 },
+  actionTitle: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  actionSub: { fontSize: 11.5, color: colors.faint, marginTop: 1 },
 
   labelRow: {
     flexDirection: 'row', alignItems: 'center', gap: 13,

@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,9 +11,11 @@ import { useCreateTopup } from '@/lib/queries';
 import { colors, spacing, borderRadius, typography, shadows } from '@/lib/theme';
 import { validateAmount } from '@/lib/validation';
 import { toast } from '@/lib/toast';
+import { track } from '@/lib/analytics';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
 import { PressableScale } from '@/components/PressableScale';
 import * as Haptics from '@/lib/haptics';
+import { preventCapture, allowCapture } from '@/lib/screenCapture';
 
 const PRESETS = [25, 50, 100, 200, 500];
 const MIN = 10;
@@ -44,6 +46,15 @@ export default function TopupScreen() {
     if (touched) setError(computeError(custom, selected));
   }, [custom, selected, touched, computeError]);
 
+  useFocusEffect(
+    useCallback(() => {
+      preventCapture('topup');
+      return () => {
+        allowCapture('topup');
+      };
+    }, []),
+  );
+
   const onCustomChange = (t: string) => {
     const cleaned = t.replace(/[^0-9.]/g, '');
     setCustom(cleaned);
@@ -71,6 +82,7 @@ export default function TopupScreen() {
       const { url } = await topup.mutateAsync(amount);
       await WebBrowser.openBrowserAsync(url);
       qc.invalidateQueries({ queryKey: ['wallet'] });
+      void track('wallet_topup', { amount, currency: 'CAD' });
       toast.success(`Opening $${amount.toFixed(2)} top-up…`);
       router.back();
     } catch (err: any) {

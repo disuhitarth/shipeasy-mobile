@@ -3,6 +3,8 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { router } from 'expo-router';
 import api, { setUnauthorizedHandler } from '@/lib/api';
+import { track, identify, clearIdentity } from '@/lib/analytics';
+import { setErrorUserId } from '@/lib/errorReporting';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -69,6 +71,9 @@ export const useAuth = create<AuthState>((set) => ({
     const { token, user } = res.data;
     await setToken(token);
     set({ user, isAuthenticated: true, isGuest: false });
+    setErrorUserId(user?._id);
+    identify(user?._id ?? 'unknown', { email: user?.email, name: user?.name });
+    void track('user_login', { method: 'password' });
   },
 
   register: async (name: string, email: string, password: string) => {
@@ -77,11 +82,17 @@ export const useAuth = create<AuthState>((set) => ({
     const { token, user } = res.data;
     await setToken(token);
     set({ user, isAuthenticated: true, isGuest: false });
+    setErrorUserId(user?._id);
+    identify(user?._id ?? 'unknown', { email: user?.email, name: user?.name });
+    void track('user_register', { method: 'password' });
   },
 
   logout: async () => {
+    void track('user_logout', {});
     await removeToken();
     set({ user: null, isAuthenticated: false, isGuest: false });
+    clearIdentity();
+    setErrorUserId(undefined);
   },
 
   enableGuest: () => {
@@ -95,12 +106,15 @@ export const useAuth = create<AuthState>((set) => ({
         return set({ isLoading: false, isGuest: true });
       }
       const res = await api.get('/auth/me');
+      const user = res.data.user;
       set({
-        user: res.data.user,
+        user,
         isAuthenticated: true,
         isLoading: false,
         isGuest: false,
       });
+      setErrorUserId(user?._id);
+      identify(user?._id ?? 'unknown', { email: user?.email, name: user?.name });
     } catch {
       await removeToken();
       set({ isLoading: false, isGuest: true });

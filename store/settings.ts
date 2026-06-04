@@ -12,6 +12,7 @@ export interface NotificationPrefs {
   labelUpdates: boolean;
   walletAlerts: boolean;
   marketing: boolean;
+  autoRefreshTracking: boolean;
 }
 
 export interface AppearancePrefs {
@@ -24,6 +25,7 @@ const DEFAULT_PREFS: NotificationPrefs = {
   labelUpdates: true,
   walletAlerts: true,
   marketing: false,
+  autoRefreshTracking: true,
 };
 
 const DEFAULT_APPEAR: AppearancePrefs = {

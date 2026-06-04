@@ -6,10 +6,12 @@ import type { TextInput as RNTextInput } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAddresses, useCreateAddress, useUpdateAddress, useDeleteAddress } from '@/lib/queries';
+import { track } from '@/lib/analytics';
 import type { Address } from '@/types';
 import { colors, spacing, borderRadius } from '@/lib/theme';
 import { validateEmail, validateName, validatePhone, validatePostalCode, validateCity, validateRequired, validateForm, type ValidationResult } from '@/lib/validation';
 import { toast } from '@/lib/toast';
+import { useDebounce } from '@/lib/useDebounce';
 import { FormField } from '@/components/ui/FormField';
 import { StaggeredItem } from '@/components/Staggered';
 import { AnimatedScreen } from '@/components/AnimatedScreen';
@@ -49,15 +51,18 @@ export default function AddressesScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    Haptics.medium();
+    Haptics.selection();
     await refetch();
     setRefreshing(false);
+    toast.success('Updated!');
   }, [refetch]);
   const createAddr = useCreateAddress();
   const updateAddr = useUpdateAddress();
   const deleteAddr = useDeleteAddress();
 
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, 300);
+  const isDebouncing = search !== debouncedSearch;
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormShape>(EMPTY_FORM);
@@ -93,11 +98,17 @@ export default function AddressesScreen() {
 
   const filtered = useMemo(() => {
     if (!addresses) return [];
-    const q = search.toLowerCase();
+    const q = debouncedSearch.toLowerCase().trim();
+    if (!q) return addresses;
     return addresses.filter(
       (a) => a.name.toLowerCase().includes(q) || a.address1.toLowerCase().includes(q) || a.city.toLowerCase().includes(q),
     );
-  }, [addresses, search]);
+  }, [addresses, debouncedSearch]);
+
+  const clearSearch = useCallback(() => {
+    Haptics.light();
+    setSearch('');
+  }, []);
 
   const openCreate = useCallback(() => {
     setEditId(null);
@@ -181,6 +192,7 @@ export default function AddressesScreen() {
       } else {
         await createAddr.mutateAsync(payload);
         Haptics.success();
+        void track('address_added', { country: payload.countryCode, isDefault: !!payload.isDefault });
         toast.success('Address saved');
       }
       setModal(false);
@@ -247,12 +259,16 @@ export default function AddressesScreen() {
               onChangeText={setSearch}
               onFocus={() => setSearchFocused(true)}
               onBlur={() => setSearchFocused(false)}
+              autoCorrect={false}
+              autoCapitalize="none"
             />
-            {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch('')}>
+            {isDebouncing ? (
+              <ActivityIndicator size="small" color={colors.faint} />
+            ) : search.length > 0 ? (
+              <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Ionicons name="close-circle" size={18} color={colors.faint} />
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
         </Animated.View>
 
@@ -263,15 +279,24 @@ export default function AddressesScreen() {
         ) : filtered.length === 0 ? (
           <Animated.View entering={FadeInDown.duration(420)} style={styles.center}>
             <View style={styles.emptyIconWrap}>
-              <Ionicons name="locate-outline" size={40} color={colors.accent} />
+              <Ionicons
+                name={debouncedSearch ? 'search-outline' : 'locate-outline'}
+                size={40}
+                color={colors.accent}
+              />
             </View>
             <Text style={styles.emptyTitle}>
-              {search ? 'No matching addresses' : 'No saved addresses'}
+              {debouncedSearch ? `No results for "${debouncedSearch}"` : 'No saved addresses'}
             </Text>
             <Text style={styles.emptySub}>
-              {search ? 'Try a different search term' : 'Tap + to add your first address'}
+              {debouncedSearch ? 'Try a different search term' : 'Tap + to add your first address'}
             </Text>
-            {!search && (
+            {debouncedSearch ? (
+              <PressableScale style={styles.emptyBtn} onPress={clearSearch} haptic="light">
+                <Ionicons name="close-circle" size={16} color={colors.white} />
+                <Text style={styles.emptyBtnText}>Clear search</Text>
+              </PressableScale>
+            ) : (
               <PressableScale style={styles.emptyBtn} onPress={openCreate} haptic="light">
                 <Ionicons name="add" size={18} color={colors.white} />
                 <Text style={styles.emptyBtnText}>Add Address</Text>
